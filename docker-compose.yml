@@ -1,0 +1,36 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: brainbattle_battle
+      POSTGRES_USER: battle
+      POSTGRES_PASSWORD: battlepass
+    ports: ["5433:5432"]
+    volumes: [battle_pgdata:/var/lib/postgresql/data]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6380:6379"]
+    restart: unless-stopped
+
+  battle-api:
+    build: .
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://battle:battlepass@postgres:5432/brainbattle_battle?schema=public
+      REDIS_URL: redis://redis:6379
+      ROOM_3V3_TIMEOUT_SEC: 60
+      ROOM_CODE_LEN: 6
+      AUTH_ME_URL: http://host.docker.internal:4000/auth/me
+      USER_PUBLIC_PROFILE_URL: http://host.docker.internal:4001/users/public
+    depends_on: [postgres, redis]
+    ports: ["3000:3000"]
+    restart: unless-stopped
+
+
+volumes:
+  battle_pgdata:
