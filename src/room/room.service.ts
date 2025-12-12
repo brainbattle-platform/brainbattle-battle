@@ -6,7 +6,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import {
+  Mode,
+  RoomStatus,
+  Role,
+  Level,
+  BattleType,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { acquireLock, releaseLock } from '../redis/lock';
@@ -24,16 +30,6 @@ import {
 import { randomUUID } from 'crypto';
 
 /* ======================
-   Prisma Enum Aliases
-====================== */
-
-type Mode = Prisma.Mode;
-type RoomStatus = Prisma.RoomStatus;
-type Role = Prisma.Role;
-type Level = Prisma.Level;
-type BattleType = Prisma.BattleType;
-
-/* ======================
    Helpers
 ====================== */
 
@@ -48,38 +44,34 @@ function genRoomCode(len: number) {
 
 function mapMode(mode: ModeDto): Mode {
   return mode === ModeDto.ONE_VS_ONE
-    ? Prisma.Mode.ONE_VS_ONE
-    : Prisma.Mode.THREE_VS_THREE;
+    ? Mode.ONE_VS_ONE
+    : Mode.THREE_VS_THREE;
 }
 
 function mapBattleType(type: BattleTypeDto): BattleType {
   return {
-    [BattleTypeDto.LISTENING]: Prisma.BattleType.LISTENING,
-    [BattleTypeDto.READING]: Prisma.BattleType.READING,
-    [BattleTypeDto.WRITING]: Prisma.BattleType.WRITING,
-    [BattleTypeDto.MIXED]: Prisma.BattleType.MIXED,
+    [BattleTypeDto.LISTENING]: BattleType.LISTENING,
+    [BattleTypeDto.READING]: BattleType.READING,
+    [BattleTypeDto.WRITING]: BattleType.WRITING,
+    [BattleTypeDto.MIXED]: BattleType.MIXED,
   }[type];
 }
 
 function mapLevel(level: LevelDto): Level {
   return {
-    [LevelDto.BASIC]: Prisma.Level.BASIC,
-    [LevelDto.MEDIUM]: Prisma.Level.MEDIUM,
-    [LevelDto.HIGH]: Prisma.Level.HIGH,
+    [LevelDto.BASIC]: Level.BASIC,
+    [LevelDto.MEDIUM]: Level.MEDIUM,
+    [LevelDto.HIGH]: Level.HIGH,
   }[level];
 }
 
 function mapRole(role: RoleDto): Role {
   return {
-    listening: Prisma.Role.LISTENING,
-    reading: Prisma.Role.READING,
-    writing: Prisma.Role.WRITING,
+    listening: Role.LISTENING,
+    reading: Role.READING,
+    writing: Role.WRITING,
   }[role];
 }
-
-/* ======================
-   Service
-====================== */
 
 @Injectable()
 export class RoomService {
@@ -95,20 +87,18 @@ export class RoomService {
     const mode = mapMode(dto.mode);
 
     const expiresAt =
-      mode === Prisma.Mode.THREE_VS_THREE
+      mode === Mode.THREE_VS_THREE
         ? new Date(Date.now() + env.ROOM_3V3_TIMEOUT_SEC * 1000)
         : new Date(Date.now() + 5 * 60 * 1000);
 
-    const roomCode = genRoomCode(env.ROOM_CODE_LEN);
-
     const room = await this.prisma.battleRoom.create({
       data: {
-        roomCode,
+        roomCode: genRoomCode(env.ROOM_CODE_LEN),
         mode,
         battleType: mapBattleType(dto.battleType),
         level: mapLevel(dto.level),
         isRanked: dto.isRanked,
-        status: Prisma.RoomStatus.WAITING,
+        status: RoomStatus.WAITING,
         hostUserId,
         expiresAt,
       },
@@ -143,17 +133,17 @@ export class RoomService {
     });
 
     if (!room) throw new NotFoundException('ROOM_NOT_FOUND');
-    if (room.status !== Prisma.RoomStatus.WAITING)
+    if (room.status !== RoomStatus.WAITING)
       throw new ConflictException('ROOM_NOT_JOINABLE');
     if (room.expiresAt.getTime() < Date.now())
       throw new GoneException('ROOM_EXPIRED');
 
-    const max = room.mode === Prisma.Mode.THREE_VS_THREE ? 6 : 2;
+    const max = room.mode === Mode.THREE_VS_THREE ? 6 : 2;
     if (room.members.length >= max)
       throw new ConflictException('ROOM_FULL');
 
     let team: 'A' | 'B' = 'A';
-    if (room.mode === Prisma.Mode.THREE_VS_THREE) {
+    if (room.mode === Mode.THREE_VS_THREE) {
       const a = room.members.filter(m => m.team === 'A').length;
       const b = room.members.filter(m => m.team === 'B').length;
       team = a <= b ? 'A' : 'B';
@@ -188,10 +178,7 @@ export class RoomService {
 
     return {
       roomId: room.id,
-      mode:
-        room.mode === Prisma.Mode.ONE_VS_ONE
-          ? '1v1'
-          : '3v3',
+      mode: room.mode === Mode.ONE_VS_ONE ? '1v1' : '3v3',
       status: room.status.toLowerCase(),
       expiresAt: room.expiresAt.toISOString(),
       members: room.members.map(m => ({
@@ -246,7 +233,6 @@ export class RoomService {
       where: { roomId_userId: { roomId, userId } },
     });
     if (!member) throw new ForbiddenException('NOT_IN_ROOM');
-
     if (ready && !member.role)
       throw new BadRequestException('ROLE_REQUIRED');
 
@@ -278,10 +264,10 @@ export class RoomService {
       if (!room) throw new NotFoundException('ROOM_NOT_FOUND');
       if (room.hostUserId !== userId)
         throw new ForbiddenException('NOT_HOST');
-      if (room.status !== Prisma.RoomStatus.WAITING)
+      if (room.status !== RoomStatus.WAITING)
         throw new ConflictException('ROOM_NOT_WAITING');
 
-      const max = room.mode === Prisma.Mode.THREE_VS_THREE ? 6 : 2;
+      const max = room.mode === Mode.THREE_VS_THREE ? 6 : 2;
       if (room.members.length !== max)
         throw new BadRequestException('NOT_ENOUGH_PLAYERS');
       if (room.members.some(m => !m.isReady))
@@ -291,7 +277,7 @@ export class RoomService {
 
       await this.prisma.battleRoom.update({
         where: { id: roomId },
-        data: { status: Prisma.RoomStatus.PLAYING, startedAt: new Date() },
+        data: { status: RoomStatus.PLAYING, startedAt: new Date() },
       });
 
       await this.syncRoom(roomId);

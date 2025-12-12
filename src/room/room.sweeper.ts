@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { RoomStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { BattleGateway } from '../ws/battle.gateway';
 
@@ -21,7 +21,7 @@ export class RoomSweeper implements OnModuleInit {
 
     const rooms = await this.prisma.battleRoom.findMany({
       where: {
-        status: Prisma.RoomStatus.WAITING,
+        status: RoomStatus.WAITING,
         expiresAt: { lt: now },
       },
       include: { members: { where: { leftAt: null } } },
@@ -32,7 +32,7 @@ export class RoomSweeper implements OnModuleInit {
       await this.prisma.battleRoom.update({
         where: { id: r.id },
         data: {
-          status: Prisma.RoomStatus.FAILED,
+          status: RoomStatus.FAILED,
           failReason: 'TIMEOUT',
           closedAt: new Date(),
         },
