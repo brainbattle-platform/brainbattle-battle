@@ -23,14 +23,18 @@ services:
       PORT: 3000
       DATABASE_URL: postgresql://battle:battlepass@postgres:5432/brainbattle_battle?schema=public
       REDIS_URL: redis://redis:6379
+
       ROOM_3V3_TIMEOUT_SEC: 60
       ROOM_CODE_LEN: 6
+
+      # If you have Auth/User services running on host:
       AUTH_ME_URL: http://host.docker.internal:4000/auth/me
       USER_PUBLIC_PROFILE_URL: http://host.docker.internal:4001/users/public
     depends_on: [postgres, redis]
     ports: ["3000:3000"]
     restart: unless-stopped
-
+    command: >
+      sh -c "npx prisma migrate deploy && node dist/main.js"
 
 volumes:
   battle_pgdata:

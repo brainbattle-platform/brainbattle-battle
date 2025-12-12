@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Mode {
+  ONE_VS_ONE
+  THREE_VS_THREE
+}
+
+enum BattleType {
+  LISTENING
+  READING
+  WRITING
+  MIXED
+}
+
+enum Level {
+  BASIC
+  MEDIUM
+  HIGH
+}
+
+enum RoomStatus {
+  WAITING
+  PLAYING
+  FAILED
+  CLOSED
+}
+
+enum Role {
+  LISTENING
+  READING
+  WRITING
+}
+
+model BattleRoom {
+  id          String     @id @default(uuid())
+  roomCode    String?    @unique
+  mode        Mode
+  battleType  BattleType
+  level       Level
+  isRanked    Boolean
+  status      RoomStatus @default(WAITING)
+  hostUserId  String
+  createdAt   DateTime   @default(now())
+  expiresAt   DateTime
+  startedAt   DateTime?
+  closedAt    DateTime?
+  failReason  String?
+
+  members     RoomMember[]
+
+  @@index([status, expiresAt])
+}
+
+model RoomMember {
+  id        String   @id @default(uuid())
+  roomId    String
+  userId    String
+  team      String?  // "A" | "B"
+  role      Role?
+  isReady   Boolean  @default(false)
+  joinedAt  DateTime @default(now())
+  leftAt    DateTime?
+
+  room      BattleRoom @relation(fields: [roomId], references: [id])
+
+  @@unique([roomId, userId])
+  @@unique([roomId, team, role]) // prevents duplicate role in team (3v3)
+}
