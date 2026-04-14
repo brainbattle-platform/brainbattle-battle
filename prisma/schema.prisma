@@ -38,9 +38,29 @@ enum Role {
   WRITING
 }
 
+enum BattleStatus {
+  CREATED
+  STARTED
+  FINISHED
+  CANCELLED
+}
+
+enum WinnerSide {
+  A
+  B
+  DRAW
+}
+
+enum RankTier {
+  BRONZE
+  SILVER
+  GOLD
+}
+
+
 model BattleRoom {
   id          String     @id @default(uuid())
-  roomCode    String?    @unique
+  roomCode    String     @unique
   mode        Mode
   battleType  BattleType
   level       Level
@@ -62,14 +82,150 @@ model RoomMember {
   id        String   @id @default(uuid())
   roomId    String
   userId    String
-  team      String?  // "A" | "B"
+  team      String   // "A" | "B"
   role      Role?
   isReady   Boolean  @default(false)
   joinedAt  DateTime @default(now())
   leftAt    DateTime?
 
-  room      BattleRoom @relation(fields: [roomId], references: [id])
+  room      BattleRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
 
   @@unique([roomId, userId])
-  @@unique([roomId, team, role]) // prevents duplicate role in team (3v3)
+  @@unique([roomId, team, role])
+}
+
+model Battle {
+  id            String       @id @default(uuid())
+  roomId        String?      @unique
+  mode          Mode
+  battleType    BattleType
+  level         Level
+  status        BattleStatus @default(CREATED)
+
+  createdAt     DateTime @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+
+  questionCount Int
+  timeLimitSec  Int
+
+  winnerSide    WinnerSide?
+  winReason     String?
+  scoreA        Int @default(0)
+  scoreB        Int @default(0)
+
+  participants  BattleParticipant[]
+  questions     BattleQuestionInstance[]
+  answers       BattleAnswer[]
+
+  @@index([status, createdAt])
+  @@index([startedAt])
+}
+
+model BattleParticipant {
+  id           String @id @default(uuid())
+  battleId     String
+  userId       String
+  team         String // "A"|"B"
+  role         Role?
+
+  correctCount Int @default(0)
+  wrongCount   Int @default(0)
+  totalTimeMs  Int @default(0)
+  score        Int @default(0)
+
+  createdAt    DateTime @default(now())
+
+  battle Battle @relation(fields: [battleId], references: [id], onDelete: Cascade)
+
+  @@unique([battleId, userId])
+  @@index([userId, createdAt])
+  @@index([battleId, team])
+}
+
+model BattleQuestionInstance {
+  id         String @id @default(uuid())
+  battleId   String
+  order      Int
+
+  bankType   BattleType
+  level      Level
+
+  questionId String // ref to QuestionBankQuestion.id
+  prompt     String
+  options    Json
+  correctKey String // never return to clients
+
+  battle   Battle @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  answers  BattleAnswer[]
+
+  @@unique([battleId, order])
+  @@index([battleId])
+}
+
+model BattleAnswer {
+  id             String @id @default(uuid())
+  battleId       String
+  questionInstId String
+  userId         String
+
+  selectedKey    String
+  isCorrect      Boolean
+  timeMs         Int
+  answeredAt     DateTime @default(now())
+
+  battle   Battle @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  question BattleQuestionInstance @relation(fields: [questionInstId], references: [id], onDelete: Cascade)
+
+  @@unique([questionInstId, userId])
+  @@index([battleId, userId])
+}
+
+model RankProfile {
+  userId     String   @id
+  tier       RankTier @default(BRONZE)
+  stars      Int      @default(0)   // stars within tier (BRONZE/SILVER)
+  goldStars  Int      @default(0)   // cumulative for GOLD
+  updatedAt  DateTime @updatedAt
+}
+
+model RankHistory {
+  id          String @id @default(uuid())
+  userId      String
+  battleId    String?
+
+  delta       Int
+  tierBefore  RankTier
+  starsBefore Int
+  goldBefore  Int
+
+  tierAfter   RankTier
+  starsAfter  Int
+  goldAfter   Int
+
+  reason      String
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([battleId])
+}
+
+/**
+ * Minimal Question Bank (admin only later)
+ * Không publish toàn bộ cho user, battle chỉ snapshot prompt/options
+ */
+model QuestionBankQuestion {
+  id        String    @id @default(uuid())
+  bankType  BattleType
+  level     Level
+  prompt    String
+  options   Json
+  correctKey String
+
+  // optional media (listening)
+  assetUrl  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([bankType, level])
 }

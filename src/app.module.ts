@@ -8,6 +8,7 @@ import { AuthModule } from './auth/auth.module';
 import { UserModule } from './user/user.module';
 import { WsModule } from './ws/ws.module';
 import { RoomModule } from './room/room.module';
+import { BattleModule } from './battle/battle.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { RoomModule } from './room/room.module';
     UserModule,
     WsModule,
     RoomModule,
+    BattleModule,
   ],
 })
 export class AppModule {}

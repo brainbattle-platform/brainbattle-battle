@@ -1,18 +1,16 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsString } from 'class-validator';
-
-export enum RoleDto {
-  LISTENING = 'listening',
-  READING = 'reading',
-  WRITING = 'writing',
-}
+import { IsIn, IsString } from 'class-validator';
 
 export class PickRoleDto {
-  @ApiProperty({ enum: ['A', 'B'], example: 'A' })
+  @ApiProperty({ example: 'user-1' })
   @IsString()
+  userId!: string;
+
+  @ApiProperty({ enum: ['A', 'B'] })
+  @IsIn(['A', 'B'])
   team!: 'A' | 'B';
 
-  @ApiProperty({ enum: RoleDto, example: RoleDto.LISTENING })
-  @IsEnum(RoleDto)
-  role!: RoleDto;
+  @ApiProperty({ enum: ['listening', 'reading', 'writing'] })
+  @IsIn(['listening', 'reading', 'writing'])
+  role!: 'listening' | 'reading' | 'writing';
 }

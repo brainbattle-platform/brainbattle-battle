@@ -5,9 +5,7 @@ import { RoomSweeper } from './room.sweeper';
 import { WsModule } from '../ws/ws.module';
 
 @Module({
-  imports: [
-    WsModule, 
-  ],
+  imports: [WsModule], // ✅ QUAN TRỌNG
   controllers: [RoomController],
   providers: [RoomService, RoomSweeper],
 })

@@ -1,1 +1,4 @@
-export type AuthUser = { userId: string };
+export interface AuthUser {
+  id: string;
+  name?: string;
+}
