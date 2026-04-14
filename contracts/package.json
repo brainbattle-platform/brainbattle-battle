@@ -1,0 +1,28 @@
+{
+  "name": "brainbattle-contracts",
+  "version": "1.0.0",
+  "description": "Smart contracts for BrainBattle",
+  "private": true,
+  "scripts": {
+    "compile": "hardhat compile",
+    "clean": "hardhat clean",
+    "test": "hardhat test",
+    "deploy:local": "hardhat run scripts/deploy.ts --network hardhat",
+    "deploy:sepolia": "hardhat run scripts/deploy.ts --network sepolia",
+    "set:operator": "hardhat run scripts/set-operator.ts --network sepolia",
+    "verify": "hardhat run scripts/verify.ts --network sepolia"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@types/node": "^20.0.0",
+    "dotenv": "^16.4.0",
+    "hardhat": "^2.22.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.3.3",
+    "typechain": "^8.3.2",
+    "@typechain/ethers-v6": "^0.5.1"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.0"
+  }
+}
