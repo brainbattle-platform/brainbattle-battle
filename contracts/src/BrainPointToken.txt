@@ -1,0 +1,36 @@
+File: BrainPointToken.sol
+
+Mục đích:
+- Triển khai token BrainPoint (BP) cho hệ thống BrainBattle
+- Dùng để reward người chơi sau khi battle kết thúc
+
+Vai trò:
+- Quản lý số dư BP
+- Cho phép contract BattleRewardRecorder mint token
+- Có thể giữ tối giản theo ERC-20
+
+Các quyết định nên chốt:
+- name: BrainPoint
+- symbol: BP
+- decimals: nên dùng 0 để dễ demo số nguyên BP
+- mint chỉ cho phép minter/owner/recorder
+- transfer có thể bật, nhưng chưa cần dùng ngay
+
+Những gì contract này KHÔNG làm:
+- Không biết gì về battle
+- Không biết matchId
+- Không tính reward
+- Không kiểm tra outcome
+
+Những function có thể có:
+- constructor(...)
+- mint(address to, uint256 amount)
+- balanceOf(address user)
+- setMinter(address)
+- transfer(...) nếu cần
+
+Những thứ cần test:
+- deploy thành công
+- mint đúng
+- người không có quyền không mint được
+- balance tăng đúng

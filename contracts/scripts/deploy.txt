@@ -1,0 +1,20 @@
+File: deploy.ts
+
+Mục đích:
+- Deploy toàn bộ contract cần thiết cho blockchain reward
+
+Thứ tự deploy:
+1. Deploy BrainPointToken
+2. Deploy BattleRewardRecorder với token address
+3. Cấp quyền mint/minter cho recorder nếu cần
+4. In ra địa chỉ contract để copy sang .env backend
+
+Kết quả mong muốn:
+- BP_TOKEN_ADDRESS
+- BATTLE_REWARD_RECORDER_ADDRESS
+- DEPLOYER_ADDRESS
+- OPERATOR_ADDRESS (nếu set luôn)
+
+Sau này:
+- script này sẽ chạy trên local trước
+- sau đó chạy trên testnet (ví dụ Sepolia)

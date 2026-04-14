@@ -1,0 +1,51 @@
+File: BattleRewardRecorder.sol
+
+Mục đích:
+- Là contract nghiệp vụ chính cho blockchain reward của BrainBattle
+
+Vai trò:
+- Ghi nhận kết quả battle cuối cùng
+- Chống ghi trùng bằng matchId
+- Mint BP cho từng player
+- Emit event để backend và app đối soát
+
+Dữ liệu chính:
+- BattleMode
+- MatchOutcome
+- RewardType
+- RewardItemInput
+- PlayerRewardInput
+- BattleRecord
+
+Function chính:
+- recordBattleResult(
+    bytes32 matchId,
+    BattleMode mode,
+    bytes32 resultHash,
+    PlayerRewardInput[] calldata rewards
+  )
+
+Yêu cầu validate:
+- onlyOperator
+- matchId != 0
+- chưa từng record matchId
+- mode 1v1 -> rewards.length == 2
+- mode 3v3 -> rewards.length == 6
+- player != address(0)
+- totalBp == sum(breakdown)
+
+Event chính:
+- BattleRecorded
+- PlayerRewardMinted
+- RewardBreakdownLogged
+- OperatorUpdated
+
+Những gì contract này KHÔNG làm:
+- Không matchmaking
+- Không scoring
+- Không anti-farm
+- Không rank
+- Không reconnect/disconnect flow
+
+Mục tiêu:
+- Biến battle result off-chain thành bằng chứng on-chain tối thiểu
