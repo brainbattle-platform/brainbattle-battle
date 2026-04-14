@@ -20,6 +20,10 @@ export enum LevelDto {
 }
 
 export class CreateRoomDto {
+  // Sprint 1 authless: hostUserId is provided by client
+  @ApiProperty({ example: 'user-1' })
+  hostUserId!: string;
+  
   @ApiProperty({ enum: ModeDto })
   @IsEnum(ModeDto)
   mode!: ModeDto;
@@ -35,4 +39,6 @@ export class CreateRoomDto {
   @ApiProperty()
   @IsBoolean()
   isRanked!: boolean;
+
+  
 }

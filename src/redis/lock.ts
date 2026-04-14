@@ -1,17 +1,20 @@
+import type Redis from 'ioredis';
 import { randomUUID } from 'crypto';
-import Redis from 'ioredis';
 
-export async function acquireLock(redis: Redis, key: string, ttl: number) {
+export async function acquireLock(client: Redis, key: string, ttlMs: number) {
   const token = randomUUID();
-  const ok = await redis.set(key, token, 'PX', ttl, 'NX');
-  return ok === 'OK' ? { key, token } : null;
+  const ok = await client.set(key, token, 'PX', ttlMs, 'NX');
+  return ok ? token : null;
 }
 
-export async function releaseLock(redis: Redis, lock: any) {
-  await redis.eval(
-    `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) end`,
-    1,
-    lock.key,
-    lock.token,
-  );
+export async function releaseLock(client: Redis, key: string, token: string) {
+  // release only if token matches
+  const lua = `
+    if redis.call("GET", KEYS[1]) == ARGV[1] then
+      return redis.call("DEL", KEYS[1])
+    else
+      return 0
+    end
+  `;
+  await client.eval(lua, 1, key, token);
 }

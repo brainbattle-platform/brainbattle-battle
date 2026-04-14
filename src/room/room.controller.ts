@@ -1,63 +1,52 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { AuthGuard } from '../auth/auth.guard';
+import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
+import { ApiTags, ApiResponse } from '@nestjs/swagger';
 import { RoomService } from './room.service';
-import {
-  CreateRoomDto,
-  JoinRoomDto,
-  PickRoleDto,
-  ReadyDto,
-  RoomStateResponse,
-} from './dto';
+import { CreateRoomDto, JoinRoomDto, PickRoleDto, ReadyDto, StartRoomDto } from './dto';
 
-@ApiTags('Battle Rooms')
-@ApiBearerAuth('JWT')
-@UseGuards(AuthGuard)
+@ApiTags('rooms')
 @Controller('/api/battle/rooms')
 export class RoomController {
-  constructor(private readonly roomService: RoomService) {}
+  constructor(private readonly service: RoomService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create battle room (1v1 / 3v3)' })
-  create(@Req() req: any, @Body() dto: CreateRoomDto) {
-    return this.roomService.createRoom(req.user.userId, dto);
+  @HttpCode(201)
+  @ApiResponse({ status: 201 })
+  create(@Body() dto: CreateRoomDto) {
+    return this.service.createRoom(dto.hostUserId, dto);
   }
 
   @Post('/join')
-  @ApiOperation({ summary: 'Join room by code' })
-  join(@Req() req: any, @Body() dto: JoinRoomDto) {
-    return this.roomService.joinByCode(req.user.userId, dto.roomCode);
+  @HttpCode(201)
+  @ApiResponse({ status: 201 })
+  join(@Body() dto: JoinRoomDto) {
+    return this.service.joinByCode(dto.userId, dto.roomCode);
   }
 
   @Get('/:roomId')
-  @ApiOperation({ summary: 'Get room state' })
-  get(@Param('roomId') roomId: string): Promise<RoomStateResponse> {
-    return this.roomService.getRoomState(roomId);
+  @HttpCode(201) // per requirement: 100% 201
+  @ApiResponse({ status: 201 })
+  state(@Param('roomId') roomId: string) {
+    return this.service.getRoomState(roomId);
   }
 
   @Post('/:roomId/pick-role')
-  @ApiOperation({ summary: 'Pick role (3v3 only)' })
-  pickRole(
-    @Req() req: any,
-    @Param('roomId') roomId: string,
-    @Body() dto: PickRoleDto,
-  ) {
-    return this.roomService.pickRole(req.user.userId, roomId, dto);
+  @HttpCode(201)
+  @ApiResponse({ status: 201 })
+  pickRole(@Param('roomId') roomId: string, @Body() dto: PickRoleDto) {
+    return this.service.pickRole(dto.userId, roomId, dto);
   }
 
   @Post('/:roomId/ready')
-  @ApiOperation({ summary: 'Set ready / unready' })
-  ready(
-    @Req() req: any,
-    @Param('roomId') roomId: string,
-    @Body() dto: ReadyDto,
-  ) {
-    return this.roomService.setReady(req.user.userId, roomId, dto.ready);
+  @HttpCode(201)
+  @ApiResponse({ status: 201 })
+  ready(@Param('roomId') roomId: string, @Body() dto: ReadyDto) {
+    return this.service.setReady(dto.userId, roomId, dto.ready);
   }
 
   @Post('/:roomId/start')
-  @ApiOperation({ summary: 'Start battle (host only)' })
-  start(@Req() req: any, @Param('roomId') roomId: string) {
-    return this.roomService.startRoom(req.user.userId, roomId);
+  @HttpCode(201)
+  @ApiResponse({ status: 201 })
+  start(@Param('roomId') roomId: string, @Body() dto: StartRoomDto) {
+    return this.service.startRoom(dto.userId, roomId);
   }
 }

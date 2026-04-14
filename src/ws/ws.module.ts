@@ -3,6 +3,6 @@ import { BattleGateway } from './battle.gateway';
 
 @Module({
   providers: [BattleGateway],
-  exports: [BattleGateway], 
+  exports: [BattleGateway],
 })
 export class WsModule {}

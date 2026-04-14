@@ -1,29 +1,47 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
-import axios from 'axios';
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+} from '@nestjs/common';
+import { Request } from 'express';
+import { AuthUser } from './auth.types';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
-  async canActivate(ctx: ExecutionContext): Promise<boolean> {
-    const req = ctx.switchToHttp().getRequest();
-    const auth = req.headers['authorization'];
+  canActivate(context: ExecutionContext): boolean {
+    const ctxType = context.getType();
 
-    if (!auth?.startsWith('Bearer ')) {
-      throw new UnauthorizedException('Missing token');
-    }
+    // ===== HTTP (REST) =====
+    if (ctxType === 'http') {
+      const req = context.switchToHttp().getRequest<Request>();
 
-    // Dev fallback
-    if (!process.env.AUTH_ME_URL) {
-      const devUserId = req.headers['x-dev-user-id'];
-      if (!devUserId) throw new UnauthorizedException('No dev user');
-      req.user = { userId: devUserId };
+      const devUserId =
+        (req.headers['x-dev-user-id'] as string) || 'dev-user-1';
+
+      const user: AuthUser = {
+        id: devUserId,
+        name: 'Dev User',
+      };
+
+      (req as any).user = user;
       return true;
     }
 
-    const { data } = await axios.get(process.env.AUTH_ME_URL!, {
-      headers: { Authorization: auth },
-    });
+    // ===== WS (Socket.IO) =====
+    if (ctxType === 'ws') {
+      const client: any = context.switchToWs().getClient();
 
-    req.user = { userId: data.userId };
+      const devUserId =
+        client.handshake.headers['x-dev-user-id'] || 'dev-user-1';
+
+      client.data.user = {
+        id: devUserId,
+        name: 'Dev User',
+      };
+
+      return true;
+    }
+
     return true;
   }
 }
