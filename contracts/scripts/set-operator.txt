@@ -1,0 +1,19 @@
+File: set-operator.ts
+
+Mục đích:
+- đổi ví operator được phép gọi recordBattleResult
+
+Khi nào dùng:
+- thay backend wallet
+- deploy môi trường mới
+- rollback service key
+
+Contract liên quan:
+- BattleRewardRecorder
+
+Cần truyền vào:
+- recorder contract address
+- new operator address
+
+Kết quả:
+- emit OperatorUpdated

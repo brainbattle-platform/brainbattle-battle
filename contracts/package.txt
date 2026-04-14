@@ -1,0 +1,17 @@
+File: package.json
+
+Mục đích:
+- quản lý dependencies riêng cho contract workspace
+
+Các package có thể cần:
+- hardhat
+- @nomicfoundation/hardhat-toolbox
+- typescript
+- ts-node
+- dotenv
+- openzeppelin/contracts
+- typechain
+
+Lưu ý:
+- workspace contracts có thể có package.json riêng
+- giúp tách dependency blockchain khỏi NestJS backend

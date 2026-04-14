@@ -1,0 +1,14 @@
+File: BrainPointToken.test.ts
+
+Mục đích:
+- kiểm thử token BP
+
+Những gì cần test:
+1. deploy đúng name/symbol/decimals
+2. mint thành công bởi tài khoản có quyền
+3. mint thất bại bởi tài khoản không có quyền
+4. balanceOf cập nhật đúng
+5. setMinter hoặc transferOwnership hoạt động đúng (nếu có)
+
+Mục tiêu:
+- đảm bảo token layer ổn định trước khi tích hợp recorder

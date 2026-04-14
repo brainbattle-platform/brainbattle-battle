@@ -1,0 +1,20 @@
+File: BattleRewardRecorder.test.ts
+
+Mục đích:
+- kiểm thử contract ghi nhận reward battle
+
+Những gì cần test:
+1. recordBattleResult thành công cho 1v1 hợp lệ
+2. recordBattleResult thành công cho 3v3 hợp lệ
+3. revert khi matchId bị ghi trùng
+4. revert khi số người chơi không đúng với mode
+5. revert khi player = zero address
+6. revert khi totalBp != tổng breakdown
+7. chỉ operator mới gọi được
+8. event BattleRecorded được emit
+9. event PlayerRewardMinted được emit
+10. event RewardBreakdownLogged được emit
+11. token balance tăng đúng sau khi record battle
+
+Mục tiêu:
+- chứng minh flow blockchain core của BrainBattle hoạt động đúng

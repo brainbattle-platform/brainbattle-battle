@@ -1,0 +1,11 @@
+File: verify.ts
+
+Mục đích:
+- verify contract trên explorer (Etherscan hoặc explorer testnet)
+
+Khi nào dùng:
+- sau khi deploy lên testnet public
+- để portfolio/demo chuyên nghiệp hơn
+
+Không bắt buộc cho local dev.
+Có thể để trống ở giai đoạn đầu.

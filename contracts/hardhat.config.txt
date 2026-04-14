@@ -1,0 +1,17 @@
+File: hardhat.config.ts
+
+Mục đích:
+- cấu hình môi trường Hardhat cho contracts
+
+Sẽ khai báo:
+- solidity version
+- network local / sepolia
+- private key deployer
+- etherscan api key nếu verify
+- paths nếu cần
+
+Đây là file trung tâm để:
+- compile
+- test
+- deploy
+- verify
