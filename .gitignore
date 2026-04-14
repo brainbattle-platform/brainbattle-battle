@@ -1,4 +1,10 @@
+# hardhat
+contracts/cache
+contracts/artifacts
+contracts/typechain
+contracts/typechain-types
 contracts/node_modules
+
 # compiled output
 /dist
 /node_modules
