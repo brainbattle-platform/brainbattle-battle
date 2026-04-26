@@ -20,7 +20,7 @@ services:
     build: .
     environment:
       NODE_ENV: production
-      PORT: 3000
+      PORT: 3001
       DATABASE_URL: postgresql://battle:battlepass@postgres:5432/brainbattle_battle?schema=public
       REDIS_URL: redis://redis:6379
 
@@ -31,7 +31,7 @@ services:
       AUTH_ME_URL: http://host.docker.internal:4000/auth/me
       USER_PUBLIC_PROFILE_URL: http://host.docker.internal:4001/users/public
     depends_on: [postgres, redis]
-    ports: ["3000:3000"]
+    ports: ["3001:3001"]
     restart: unless-stopped
     command: >
       sh -c "npx prisma migrate deploy && node dist/main.js"

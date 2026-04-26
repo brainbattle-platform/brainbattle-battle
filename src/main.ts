@@ -19,16 +19,31 @@ async function bootstrap() {
   app.useWebSocketAdapter(new RedisIoAdapter(app, pub, sub));
 
   if (process.env.SWAGGER_ENABLED === 'true') {
-    const config = new DocumentBuilder()
-      .setTitle('BrainBattle - Battle API (Sprint 1)')
-      .setDescription('Room/Lobby + Socket.IO (No Auth)')
-      .setVersion('1.0.0')
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('BrainBattle Identity API')
+      .setDescription('Identity/Profile service backed by Supabase Auth')
+      .setVersion('1.0')
+      .addBearerAuth(
+        {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          in: 'header',
+          name: 'Authorization',
+          description: 'Supabase access token',
+        },
+        'bearer',
+      )
       .build();
 
-    const document = SwaggerModule.createDocument(app, config);
-    SwaggerModule.setup('/api/docs', app, document);
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup('docs', app, document);
+
+
+    await app.listen(process.env.PORT ?? 3001);
   }
 
-  await app.listen(process.env.PORT ?? 3000);
+
+  
 }
 bootstrap();
