@@ -1,44 +1,48 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsBoolean, IsEnum } from 'class-validator';
-
-export enum ModeDto {
-  ONE_VS_ONE = '1v1',
-  THREE_VS_THREE = '3v3',
-}
-
-export enum BattleTypeDto {
-  LISTENING = 'listening',
-  READING = 'reading',
-  WRITING = 'writing',
-  MIXED = 'mixed',
-}
-
-export enum LevelDto {
-  BASIC = 'basic',
-  MEDIUM = 'medium',
-  HIGH = 'high',
-}
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { BattleFormat, BattleRole, BattleSkill, RoomTeam } from '@prisma/client';
+import { IsBoolean, IsEnum, IsOptional } from 'class-validator';
 
 export class CreateRoomDto {
-  // Sprint 1 authless: hostUserId is provided by client
-  @ApiProperty({ example: 'user-1' })
-  hostUserId!: string;
-  
-  @ApiProperty({ enum: ModeDto })
-  @IsEnum(ModeDto)
-  mode!: ModeDto;
+  @ApiProperty({
+    enum: BattleFormat,
+    example: BattleFormat.DUEL_1V1,
+    description: 'DUEL_1V1 = 2 players, TEAM_3V3 = 6 players role-based',
+  })
+  @IsEnum(BattleFormat)
+  format!: BattleFormat;
 
-  @ApiProperty({ enum: BattleTypeDto })
-  @IsEnum(BattleTypeDto)
-  battleType!: BattleTypeDto;
+  @ApiProperty({
+    enum: BattleSkill,
+    example: BattleSkill.GRAMMAR,
+    description:
+      'For DUEL_1V1 choose GRAMMAR/LISTENING/VOCABULARY/MIXED. For TEAM_3V3 service will force MIXED.',
+  })
+  @IsEnum(BattleSkill)
+  skill!: BattleSkill;
 
-  @ApiProperty({ enum: LevelDto })
-  @IsEnum(LevelDto)
-  level!: LevelDto;
-
-  @ApiProperty()
+  @ApiPropertyOptional({
+    example: true,
+    default: false,
+  })
+  @IsOptional()
   @IsBoolean()
-  isRanked!: boolean;
+  isRanked?: boolean;
 
-  
+  @ApiPropertyOptional({
+    enum: RoomTeam,
+    example: RoomTeam.A,
+    description: 'Required for TEAM_3V3 host slot. Ignored for DUEL_1V1.',
+  })
+  @IsOptional()
+  @IsEnum(RoomTeam)
+  team?: RoomTeam;
+
+  @ApiPropertyOptional({
+    enum: BattleRole,
+    example: BattleRole.GRAMMAR,
+    description: 'Required for TEAM_3V3 host slot. Ignored for DUEL_1V1.',
+  })
+  @IsOptional()
+  @IsEnum(BattleRole)
+  role?: BattleRole;
 }

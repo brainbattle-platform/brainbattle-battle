@@ -1,40 +1,59 @@
-version: "3.9"
-
 services:
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_DB: brainbattle_battle
-      POSTGRES_USER: battle
-      POSTGRES_PASSWORD: battlepass
-    ports: ["5433:5432"]
-    volumes: [battle_pgdata:/var/lib/postgresql/data]
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    ports: ["6380:6379"]
-    restart: unless-stopped
-
   battle-api:
-    build: .
-    environment:
-      NODE_ENV: production
-      PORT: 3000
-      DATABASE_URL: postgresql://battle:battlepass@postgres:5432/brainbattle_battle?schema=public
-      REDIS_URL: redis://redis:6379
-
-      ROOM_3V3_TIMEOUT_SEC: 60
-      ROOM_CODE_LEN: 6
-
-      # If you have Auth/User services running on host:
-      AUTH_ME_URL: http://host.docker.internal:4000/auth/me
-      USER_PUBLIC_PROFILE_URL: http://host.docker.internal:4001/users/public
-    depends_on: [postgres, redis]
-    ports: ["3000:3000"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: brainbattle-battle-api
     restart: unless-stopped
-    command: >
-      sh -c "npx prisma migrate deploy && node dist/main.js"
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env.docker
+    volumes:
+      - .:/app
+      - /app/node_modules
+    depends_on:
+      battle-db:
+        condition: service_healthy
+      battle-redis:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: npm run start:dev
+
+  battle-db:
+    image: postgres:16-alpine
+    container_name: brainbattle-battle-db
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: brainbattle
+      POSTGRES_PASSWORD: brainbattle
+      POSTGRES_DB: brainbattle_battle
+    volumes:
+      - battle_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brainbattle -d brainbattle_battle"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  battle-redis:
+    image: redis:7-alpine
+    container_name: brainbattle-battle-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - battle_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
-  battle_pgdata:
+  battle_postgres_data:
+  battle_redis_data:

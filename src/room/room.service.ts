@@ -1,255 +1,709 @@
 import {
   BadRequestException,
-  ConflictException,
   ForbiddenException,
-  GoneException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { BattleType, Level, Mode, Role, RoomStatus } from '@prisma/client';
+import {
+  BattleFormat,
+  BattleRole,
+  BattleRoomStatus,
+  BattleSkill,
+  Prisma,
+  RoomTeam,
+} from '@prisma/client';
+import { addMinutes } from 'date-fns';
+import { env } from '../common/env';
 import { PrismaService } from '../prisma/prisma.service';
-import { RedisService } from '../redis/redis.service';
-import { acquireLock, releaseLock } from '../redis/lock';
-import { BattleGateway } from '../ws/battle.gateway';
-import { CreateRoomDto, ModeDto, BattleTypeDto, LevelDto, PickRoleDto, RoomStateResponse } from './dto';
-import { randomUUID } from 'crypto';
-
-function genRoomCode(len: number) {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let out = '';
-  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
-  return out;
-}
-
-function mapMode(m: ModeDto): Mode {
-  return m === ModeDto.ONE_VS_ONE ? Mode.ONE_VS_ONE : Mode.THREE_VS_THREE;
-}
-function mapBattleType(t: BattleTypeDto): BattleType {
-  return {
-    [BattleTypeDto.LISTENING]: BattleType.LISTENING,
-    [BattleTypeDto.READING]: BattleType.READING,
-    [BattleTypeDto.WRITING]: BattleType.WRITING,
-    [BattleTypeDto.MIXED]: BattleType.MIXED,
-  }[t];
-}
-function mapLevel(l: LevelDto): Level {
-  return {
-    [LevelDto.BASIC]: Level.BASIC,
-    [LevelDto.MEDIUM]: Level.MEDIUM,
-    [LevelDto.HIGH]: Level.HIGH,
-  }[l];
-}
-function mapRole(r: PickRoleDto['role']): Role {
-  return { listening: Role.LISTENING, reading: Role.READING, writing: Role.WRITING }[r];
-}
+import { AdminListRoomsDto, ChangeSlotDto, CreateRoomDto, JoinRoomDto } from './dto';
+import { toRoomResponse } from './room.mapper';
 
 @Injectable()
 export class RoomService {
-  private readonly ROOM_3V3_TIMEOUT_SEC = Number(process.env.ROOM_3V3_TIMEOUT_SEC ?? 60);
-  private readonly ROOM_CODE_LEN = Number(process.env.ROOM_CODE_LEN ?? 6);
+  constructor(private readonly prisma: PrismaService) { }
 
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly redis: RedisService,
-    private readonly gateway: BattleGateway,
-  ) {}
+  async createRoom(userId: string, dto: CreateRoomDto) {
+    const normalized = this.normalizeCreateRoomDto(dto);
 
-  async createRoom(hostUserId: string, dto: CreateRoomDto) {
-    const mode = mapMode(dto.mode);
+    const room = await this.prisma.$transaction(async (tx) => {
+      const createdRoom = await tx.battleRoom.create({
+        data: {
+          code: await this.generateUniqueRoomCode(tx),
+          hostUserId: userId,
+          format: normalized.format,
+          skill: normalized.skill,
+          isRanked: normalized.isRanked,
+          status: BattleRoomStatus.WAITING,
+          expiresAt: addMinutes(new Date(), env.ROOM_EXPIRE_MINUTES),
+        },
+      });
 
-    const expiresAt =
-      mode === Mode.THREE_VS_THREE
-        ? new Date(Date.now() + this.ROOM_3V3_TIMEOUT_SEC * 1000)
-        : new Date(Date.now() + 5 * 60 * 1000);
+      await tx.roomMember.create({
+        data: {
+          roomId: createdRoom.id,
+          userId,
+          team: normalized.hostTeam,
+          role: normalized.hostRole,
+          isReady: false,
+        },
+      });
 
-    // code collision safe
-    let roomCode = genRoomCode(this.ROOM_CODE_LEN);
-    for (let i = 0; i < 5; i++) {
-      const exist = await this.prisma.battleRoom.findUnique({ where: { roomCode } });
-      if (!exist) break;
-      roomCode = genRoomCode(this.ROOM_CODE_LEN);
+      return tx.battleRoom.findUniqueOrThrow({
+        where: { id: createdRoom.id },
+        include: { members: true },
+      });
+    });
+
+    return toRoomResponse(room);
+  }
+
+  async joinByCode(userId: string, dto: JoinRoomDto) {
+    const room = await this.prisma.battleRoom.findUnique({
+      where: { code: dto.roomCode.trim().toUpperCase() },
+      include: { members: true },
+    });
+
+    if (!room) {
+      throw new NotFoundException('Room not found');
     }
 
-    const room = await this.prisma.battleRoom.create({
-      data: {
-        roomCode,
-        mode,
-        battleType: mapBattleType(dto.battleType),
-        level: mapLevel(dto.level),
-        isRanked: dto.isRanked,
-        status: RoomStatus.WAITING,
-        hostUserId,
-        expiresAt,
+    this.assertRoomJoinable(room.status, room.expiresAt);
+
+    const activeMembers = room.members.filter((member) => !member.leftAt);
+    const existingMember = activeMembers.find(
+      (member) => member.userId === userId,
+    );
+
+    if (existingMember) {
+      return toRoomResponse(room);
+    }
+
+    const maxPlayers = this.getMaxPlayers(room.format);
+
+    if (activeMembers.length >= maxPlayers) {
+      throw new BadRequestException('Room is full');
+    }
+
+    const slot = this.resolveJoinSlot(room.format, activeMembers, dto);
+
+    await this.assertSlotAvailable(room.id, slot.team, slot.role);
+
+    const updatedRoom = await this.prisma.$transaction(async (tx) => {
+      await tx.roomMember.create({
+        data: {
+          roomId: room.id,
+          userId,
+          team: slot.team,
+          role: slot.role,
+          isReady: false,
+        },
+      });
+
+      await tx.battleRoom.update({
+        where: { id: room.id },
+        data: { status: BattleRoomStatus.WAITING },
+      });
+
+      return tx.battleRoom.findUniqueOrThrow({
+        where: { id: room.id },
+        include: { members: true },
+      });
+    });
+
+    return toRoomResponse(updatedRoom);
+  }
+
+  async getRoom(roomId: string) {
+    const room = await this.getRoomOrThrow(roomId);
+    return toRoomResponse(room);
+  }
+
+  async getRoomByCode(roomCode: string) {
+    const room = await this.prisma.battleRoom.findUnique({
+      where: { code: roomCode.trim().toUpperCase() },
+      include: { members: true },
+    });
+
+    if (!room) {
+      throw new NotFoundException('Room not found');
+    }
+
+    return toRoomResponse(room);
+  }
+
+  async getMyActiveRoom(userId: string) {
+    const member = await this.prisma.roomMember.findFirst({
+      where: {
+        userId,
+        leftAt: null,
+        room: {
+          status: {
+            in: [
+              BattleRoomStatus.WAITING,
+              BattleRoomStatus.READY,
+              BattleRoomStatus.PLAYING,
+            ],
+          },
+        },
+      },
+      orderBy: {
+        joinedAt: 'desc',
+      },
+      include: {
+        room: {
+          include: {
+            members: true,
+          },
+        },
       },
     });
 
-    await this.prisma.roomMember.create({
-      data: { roomId: room.id, userId: hostUserId, team: 'A', role: null, isReady: false },
-    });
-
-    await this.syncRoom(room.id);
-    return { roomId: room.id, roomCode: room.roomCode, status: 'waiting', expiresAt: room.expiresAt.toISOString() };
-  }
-
-  async joinByCode(userId: string, roomCode: string) {
-    const room = await this.prisma.battleRoom.findUnique({
-      where: { roomCode },
-      include: { members: { where: { leftAt: null } } },
-    });
-    if (!room) throw new NotFoundException('ROOM_NOT_FOUND');
-    if (room.status !== RoomStatus.WAITING) throw new ConflictException('ROOM_NOT_JOINABLE');
-    if (room.expiresAt.getTime() < Date.now()) throw new GoneException('ROOM_EXPIRED');
-
-    const max = room.mode === Mode.THREE_VS_THREE ? 6 : 2;
-    if (room.members.length >= max) throw new ConflictException('ROOM_FULL');
-
-    let team: 'A' | 'B' = 'A';
-    if (room.mode === Mode.THREE_VS_THREE) {
-      const a = room.members.filter(m => m.team === 'A').length;
-      const b = room.members.filter(m => m.team === 'B').length;
-      team = a <= b ? 'A' : 'B';
-    } else {
-      team = room.members.length === 0 ? 'A' : 'B';
+    if (!member) {
+      return null;
     }
 
-    await this.prisma.roomMember.upsert({
-      where: { roomId_userId: { roomId: room.id, userId } },
-      update: { leftAt: null, team, role: null, isReady: false },
-      create: { roomId: room.id, userId, team, role: null, isReady: false },
-    });
-
-    await this.syncRoom(room.id);
-    return { roomId: room.id, status: 'waiting', expiresAt: room.expiresAt.toISOString() };
+    return toRoomResponse(member.room);
   }
 
-  async getRoomState(roomId: string): Promise<RoomStateResponse> {
-    const room = await this.prisma.battleRoom.findUnique({
-      where: { id: roomId },
-      include: { members: { where: { leftAt: null } } },
+  async setReady(userId: string, roomId: string, isReady: boolean) {
+    const room = await this.getRoomOrThrow(roomId);
+
+    this.assertRoomJoinable(room.status, room.expiresAt);
+
+    const member = room.members.find(
+      (item) => item.userId === userId && !item.leftAt,
+    );
+
+    if (!member) {
+      throw new ForbiddenException('You are not in this room');
+    }
+
+    const updatedRoom = await this.prisma.$transaction(async (tx) => {
+      await tx.roomMember.update({
+        where: { id: member.id },
+        data: { isReady },
+      });
+
+      const refreshedRoom = await tx.battleRoom.findUniqueOrThrow({
+        where: { id: roomId },
+        include: { members: true },
+      });
+
+      const nextStatus = this.calculateRoomStatus(refreshedRoom);
+
+      if (refreshedRoom.status !== nextStatus) {
+        await tx.battleRoom.update({
+          where: { id: roomId },
+          data: { status: nextStatus },
+        });
+      }
+
+      return tx.battleRoom.findUniqueOrThrow({
+        where: { id: roomId },
+        include: { members: true },
+      });
     });
-    if (!room) throw new NotFoundException('ROOM_NOT_FOUND');
+
+    return toRoomResponse(updatedRoom);
+  }
+
+  async changeSlot(userId: string, roomId: string, dto: ChangeSlotDto) {
+    const room = await this.getRoomOrThrow(roomId);
+
+    if (room.format !== BattleFormat.TEAM_3V3) {
+      throw new BadRequestException('Slot change is only available for TEAM_3V3');
+    }
+
+    this.assertRoomJoinable(room.status, room.expiresAt);
+
+    const member = room.members.find(
+      (item) => item.userId === userId && !item.leftAt,
+    );
+
+    if (!member) {
+      throw new ForbiddenException('You are not in this room');
+    }
+
+    await this.assertSlotAvailable(roomId, dto.team, dto.role, member.id);
+
+    const updatedRoom = await this.prisma.$transaction(async (tx) => {
+      await tx.roomMember.update({
+        where: { id: member.id },
+        data: {
+          team: dto.team,
+          role: dto.role,
+          isReady: false,
+        },
+      });
+
+      await tx.battleRoom.update({
+        where: { id: roomId },
+        data: { status: BattleRoomStatus.WAITING },
+      });
+
+      return tx.battleRoom.findUniqueOrThrow({
+        where: { id: roomId },
+        include: { members: true },
+      });
+    });
+
+    return toRoomResponse(updatedRoom);
+  }
+
+  async leaveRoom(userId: string, roomId: string) {
+    const room = await this.getRoomOrThrow(roomId);
+
+    if (
+      room.status === BattleRoomStatus.PLAYING ||
+      room.status === BattleRoomStatus.FINISHED
+    ) {
+      throw new BadRequestException(
+        'Cannot leave a room that is already playing or finished',
+      );
+    }
+
+    const member = room.members.find(
+      (item) => item.userId === userId && !item.leftAt,
+    );
+
+    if (!member) {
+      throw new ForbiddenException('You are not in this room');
+    }
+
+    const updatedRoom = await this.prisma.$transaction(async (tx) => {
+      await tx.roomMember.update({
+        where: { id: member.id },
+        data: {
+          leftAt: new Date(),
+          isReady: false,
+        },
+      });
+
+      const activeMembers = await tx.roomMember.findMany({
+        where: {
+          roomId,
+          leftAt: null,
+        },
+      });
+
+      if (activeMembers.length === 0 || room.hostUserId === userId) {
+        await tx.battleRoom.update({
+          where: { id: roomId },
+          data: {
+            status: BattleRoomStatus.CANCELLED,
+            closedAt: new Date(),
+            closeReason:
+              room.hostUserId === userId ? 'HOST_LEFT' : 'EMPTY_ROOM',
+          },
+        });
+      } else {
+        await tx.battleRoom.update({
+          where: { id: roomId },
+          data: {
+            status: BattleRoomStatus.WAITING,
+          },
+        });
+      }
+
+      return tx.battleRoom.findUniqueOrThrow({
+        where: { id: roomId },
+        include: { members: true },
+      });
+    });
+
+    return toRoomResponse(updatedRoom);
+  }
+
+  async cancelRoom(userId: string, roomId: string) {
+    const room = await this.getRoomOrThrow(roomId);
+
+    if (room.hostUserId !== userId) {
+      throw new ForbiddenException('Only host can cancel this room');
+    }
+
+    if (
+      room.status === BattleRoomStatus.PLAYING ||
+      room.status === BattleRoomStatus.FINISHED
+    ) {
+      throw new BadRequestException(
+        'Cannot cancel a room that is already playing or finished',
+      );
+    }
+
+    const updatedRoom = await this.prisma.battleRoom.update({
+      where: { id: roomId },
+      data: {
+        status: BattleRoomStatus.CANCELLED,
+        closedAt: new Date(),
+        closeReason: 'HOST_CANCELLED',
+      },
+      include: { members: true },
+    });
+
+    return toRoomResponse(updatedRoom);
+  }
+
+  async startCheck(userId: string, roomId: string) {
+    const room = await this.getRoomOrThrow(roomId);
+
+    if (room.hostUserId !== userId) {
+      throw new ForbiddenException('Only host can start this room');
+    }
+
+    if (room.status !== BattleRoomStatus.READY) {
+      throw new BadRequestException('Room is not ready');
+    }
+
+    const activeMembers = room.members.filter((member) => !member.leftAt);
+    const maxPlayers = this.getMaxPlayers(room.format);
+
+    if (activeMembers.length !== maxPlayers) {
+      throw new BadRequestException('Room does not have enough players');
+    }
+
+    if (room.format === BattleFormat.TEAM_3V3) {
+      this.assertValidTeam3v3Composition(activeMembers);
+    }
 
     return {
-      roomId: room.id,
-      roomCode: room.roomCode,
-      mode: room.mode === Mode.ONE_VS_ONE ? '1v1' : '3v3',
-      status: room.status.toLowerCase(),
-      expiresAt: room.expiresAt.toISOString(),
-      battleType: room.battleType.toLowerCase(),
-      level: room.level.toLowerCase(),
-      isRanked: room.isRanked,
-      hostUserId: room.hostUserId,
-      members: room.members.map(m => ({
-        userId: m.userId,
-        team: m.team as 'A' | 'B',
-        role: m.role ? m.role.toLowerCase() : null,
-        ready: m.isReady,
-      })),
+      canStart: true,
+      room: toRoomResponse(room),
     };
   }
 
-  async pickRole(userId: string, roomId: string, dto: PickRoleDto) {
-    const lockKey = `lock:room:${roomId}:pick`;
-    const token = await acquireLock(this.redis.client, lockKey, 3000);
-    if (!token) throw new ConflictException('LOCKED_TRY_AGAIN');
+  async assertRoomReadyForBattle(roomId: string) {
+    const room = await this.getRoomOrThrow(roomId);
 
-    try {
-      const room = await this.prisma.battleRoom.findUnique({ where: { id: roomId } });
-      if (!room) throw new NotFoundException('ROOM_NOT_FOUND');
-      if (room.mode !== Mode.THREE_VS_THREE) throw new BadRequestException('ROLE_ONLY_FOR_3V3');
-      if (room.status !== RoomStatus.WAITING) throw new ConflictException('ROOM_NOT_WAITING');
-
-      const member = await this.prisma.roomMember.findUnique({ where: { roomId_userId: { roomId, userId } } });
-      if (!member || member.leftAt) throw new ForbiddenException('NOT_IN_ROOM');
-
-      const role = mapRole(dto.role);
-
-      const taken = await this.prisma.roomMember.findFirst({
-        where: { roomId, team: dto.team, role, leftAt: null },
-      });
-      if (taken && taken.userId !== userId) throw new ConflictException('ROLE_TAKEN');
-
-      await this.prisma.roomMember.update({
-        where: { roomId_userId: { roomId, userId } },
-        data: { team: dto.team, role, isReady: false },
-      });
-
-      await this.syncRoom(roomId);
-      return { ok: true };
-    } finally {
-      await releaseLock(this.redis.client, lockKey, token);
+    if (room.status !== BattleRoomStatus.READY) {
+      throw new BadRequestException('Room is not ready');
     }
+
+    return room;
   }
 
-  async setReady(userId: string, roomId: string, ready: boolean) {
-    const room = await this.prisma.battleRoom.findUnique({ where: { id: roomId } });
-    if (!room) throw new NotFoundException('ROOM_NOT_FOUND');
-    if (room.status !== RoomStatus.WAITING) throw new ConflictException('ROOM_NOT_WAITING');
-    if (room.expiresAt.getTime() < Date.now()) throw new GoneException('ROOM_EXPIRED');
-
-    const member = await this.prisma.roomMember.findUnique({ where: { roomId_userId: { roomId, userId } } });
-    if (!member || member.leftAt) throw new ForbiddenException('NOT_IN_ROOM');
-
-    if (room.mode === Mode.THREE_VS_THREE && ready && !member.role) {
-      throw new BadRequestException('ROLE_REQUIRED');
-    }
-
-    await this.prisma.roomMember.update({
-      where: { roomId_userId: { roomId, userId } },
-      data: { isReady: ready },
+  async markRoomPlaying(roomId: string) {
+    const room = await this.prisma.battleRoom.update({
+      where: { id: roomId },
+      data: {
+        status: BattleRoomStatus.PLAYING,
+        startedAt: new Date(),
+      },
+      include: { members: true },
     });
 
-    await this.syncRoom(roomId);
-    return { ok: true };
+    return toRoomResponse(room);
   }
 
-  async startRoom(userId: string, roomId: string) {
-    const lockKey = `lock:room:${roomId}:start`;
-    const token = await acquireLock(this.redis.client, lockKey, 5000);
-    if (!token) throw new ConflictException('LOCKED_TRY_AGAIN');
+  private normalizeCreateRoomDto(dto: CreateRoomDto) {
+    if (dto.format === BattleFormat.DUEL_1V1) {
+      return {
+        format: dto.format,
+        skill: dto.skill,
+        isRanked: dto.isRanked ?? false,
+        hostTeam: RoomTeam.A,
+        hostRole: null,
+      };
+    }
 
-    try {
-      const room = await this.prisma.battleRoom.findUnique({
-        where: { id: roomId },
-        include: { members: { where: { leftAt: null } } },
-      });
-      if (!room) throw new NotFoundException('ROOM_NOT_FOUND');
-      if (room.hostUserId !== userId) throw new ForbiddenException('NOT_HOST');
-      if (room.status !== RoomStatus.WAITING) throw new ConflictException('ROOM_NOT_WAITING');
-      if (room.expiresAt.getTime() < Date.now()) throw new GoneException('ROOM_EXPIRED');
+    if (dto.skill !== BattleSkill.MIXED) {
+      throw new BadRequestException('TEAM_3V3 must use MIXED skill');
+    }
 
-      const expected = room.mode === Mode.THREE_VS_THREE ? 6 : 2;
-      if (room.members.length !== expected) throw new BadRequestException('NOT_ENOUGH_PLAYERS');
-      if (room.members.some(m => !m.isReady)) throw new BadRequestException('NOT_READY');
+    if (!dto.team || !dto.role) {
+      throw new BadRequestException('TEAM_3V3 requires host team and role');
+    }
 
-      if (room.mode === Mode.THREE_VS_THREE) {
-        const need = [Role.LISTENING, Role.READING, Role.WRITING];
-        const rolesOf = (t: 'A' | 'B') =>
-          new Set(room.members.filter(m => m.team === t).map(m => m.role).filter(Boolean) as Role[]);
-        const a = rolesOf('A');
-        const b = rolesOf('B');
-        if (!need.every(r => a.has(r)) || !need.every(r => b.has(r))) {
-          throw new BadRequestException('ROLES_INCOMPLETE');
-        }
+    return {
+      format: dto.format,
+      skill: BattleSkill.MIXED,
+      isRanked: dto.isRanked ?? false,
+      hostTeam: dto.team,
+      hostRole: dto.role,
+    };
+  }
+
+  private resolveJoinSlot(
+    format: BattleFormat,
+    activeMembers: Array<{ team: RoomTeam; role: BattleRole | null }>,
+    dto: JoinRoomDto,
+  ) {
+    if (format === BattleFormat.DUEL_1V1) {
+      const hasTeamA = activeMembers.some(
+        (member) => member.team === RoomTeam.A,
+      );
+      const hasTeamB = activeMembers.some(
+        (member) => member.team === RoomTeam.B,
+      );
+
+      if (!hasTeamA) {
+        return { team: RoomTeam.A, role: null };
       }
 
-      const battleId = randomUUID();
+      if (!hasTeamB) {
+        return { team: RoomTeam.B, role: null };
+      }
 
-      await this.prisma.battleRoom.update({
-        where: { id: roomId },
-        data: { status: RoomStatus.PLAYING, startedAt: new Date() },
-      });
+      throw new BadRequestException('Room is full');
+    }
 
-      await this.syncRoom(roomId);
-      return { battleId, status: 'playing' };
-    } finally {
-      await releaseLock(this.redis.client, lockKey, token);
+    if (!dto.team || !dto.role) {
+      throw new BadRequestException('TEAM_3V3 requires team and role');
+    }
+
+    return {
+      team: dto.team,
+      role: dto.role,
+    };
+  }
+
+  private async assertSlotAvailable(
+    roomId: string,
+    team: RoomTeam,
+    role: BattleRole | null,
+    currentMemberId?: string,
+  ) {
+    if (!role) return;
+
+    const existing = await this.prisma.roomMember.findFirst({
+      where: {
+        roomId,
+        team,
+        role,
+        leftAt: null,
+        id: currentMemberId ? { not: currentMemberId } : undefined,
+      },
+    });
+
+    if (existing) {
+      throw new BadRequestException(`Slot ${team}/${role} is already taken`);
     }
   }
 
-  private async syncRoom(roomId: string) {
-    const state = await this.getRoomState(roomId);
-    await this.redis.client.set(`room:${roomId}`, JSON.stringify(state), 'PX', 120_000);
-    this.gateway.emitRoomUpdated(roomId, state);
+  private calculateRoomStatus(room: {
+    format: BattleFormat;
+    members: Array<{
+      leftAt: Date | null;
+      isReady: boolean;
+      role: BattleRole | null;
+      team: RoomTeam;
+    }>;
+  }) {
+    const activeMembers = room.members.filter((member) => !member.leftAt);
+    const maxPlayers = this.getMaxPlayers(room.format);
+
+    if (activeMembers.length !== maxPlayers) {
+      return BattleRoomStatus.WAITING;
+    }
+
+    if (room.format === BattleFormat.TEAM_3V3) {
+      this.assertValidTeam3v3Composition(activeMembers);
+    }
+
+    const allReady = activeMembers.every((member) => member.isReady);
+
+    return allReady ? BattleRoomStatus.READY : BattleRoomStatus.WAITING;
+  }
+
+  private assertValidTeam3v3Composition(
+    members: Array<{ team: RoomTeam; role: BattleRole | null }>,
+  ) {
+    const requiredRoles = [
+      BattleRole.GRAMMAR,
+      BattleRole.LISTENING,
+      BattleRole.VOCABULARY,
+    ];
+
+    for (const team of [RoomTeam.A, RoomTeam.B]) {
+      const teamMembers = members.filter((member) => member.team === team);
+
+      if (teamMembers.length !== 3) {
+        throw new BadRequestException(
+          `Team ${team} must have exactly 3 players`,
+        );
+      }
+
+      for (const role of requiredRoles) {
+        const count = teamMembers.filter(
+          (member) => member.role === role,
+        ).length;
+
+        if (count !== 1) {
+          throw new BadRequestException(
+            `Team ${team} must have exactly one ${role} role`,
+          );
+        }
+      }
+    }
+  }
+
+  private assertRoomJoinable(status: BattleRoomStatus, expiresAt: Date | null) {
+    if (status === BattleRoomStatus.EXPIRED) {
+      throw new BadRequestException('Room has expired');
+    }
+
+    if (expiresAt && expiresAt.getTime() < Date.now()) {
+      throw new BadRequestException('Room has expired');
+    }
+
+    if (
+      status !== BattleRoomStatus.WAITING &&
+      status !== BattleRoomStatus.READY
+    ) {
+      throw new BadRequestException('Room is not joinable');
+    }
+  }
+
+  private async getRoomOrThrow(roomId: string) {
+    const room = await this.prisma.battleRoom.findUnique({
+      where: { id: roomId },
+      include: { members: true },
+    });
+
+    if (!room) {
+      throw new NotFoundException('Room not found');
+    }
+
+    return room;
+  }
+
+  private getMaxPlayers(format: BattleFormat) {
+    return format === BattleFormat.DUEL_1V1 ? 2 : 6;
+  }
+
+  private async generateUniqueRoomCode(tx: Prisma.TransactionClient) {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const code = this.generateRoomCode();
+
+      const existing = await tx.battleRoom.findUnique({
+        where: { code },
+      });
+
+      if (!existing) {
+        return code;
+      }
+    }
+
+    throw new BadRequestException('Failed to generate room code');
+  }
+
+  private generateRoomCode() {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+
+    for (let i = 0; i < env.ROOM_CODE_LEN; i += 1) {
+      code += alphabet[Math.floor(Math.random() * alphabet.length)];
+    }
+
+    return code;
+  }
+  async adminListRooms(query: AdminListRoomsDto) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.BattleRoomWhereInput = {
+      status: query.status,
+      format: query.format,
+      code: query.code ? query.code.trim().toUpperCase() : undefined,
+      members: query.userId
+        ? {
+          some: {
+            userId: query.userId,
+            leftAt: null,
+          },
+        }
+        : undefined,
+    };
+
+    const [total, rooms] = await this.prisma.$transaction([
+      this.prisma.battleRoom.count({ where }),
+      this.prisma.battleRoom.findMany({
+        where,
+        include: { members: true },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    return {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      items: rooms.map(toRoomResponse),
+    };
+  }
+
+  async adminGetRoomDetail(roomId: string) {
+    const room = await this.getRoomOrThrow(roomId);
+
+    return {
+      ...toRoomResponse(room),
+      analysis: this.buildRoomAnalysis(room),
+    };
+  }
+
+  async adminForceCancelRoom(adminUserId: string, roomId: string) {
+    const room = await this.getRoomOrThrow(roomId);
+
+    if (room.status === BattleRoomStatus.FINISHED) {
+      throw new BadRequestException('Cannot force cancel a finished room');
+    }
+
+    const updatedRoom = await this.prisma.battleRoom.update({
+      where: { id: roomId },
+      data: {
+        status: BattleRoomStatus.CANCELLED,
+        closedAt: new Date(),
+        closeReason: `ADMIN_FORCE_CANCELLED:${adminUserId}`,
+      },
+      include: { members: true },
+    });
+
+    return {
+      ...toRoomResponse(updatedRoom),
+      analysis: this.buildRoomAnalysis(updatedRoom),
+    };
+  }
+
+  private buildRoomAnalysis(room: {
+    format: BattleFormat;
+    status: BattleRoomStatus;
+    expiresAt: Date | null;
+    members: Array<{
+      leftAt: Date | null;
+      isReady: boolean;
+      team: RoomTeam;
+      role: BattleRole | null;
+    }>;
+  }) {
+    const activeMembers = room.members.filter((member) => !member.leftAt);
+    const maxPlayers = this.getMaxPlayers(room.format);
+    const readyMembers = activeMembers.filter((member) => member.isReady);
+
+    const teamA = activeMembers.filter((member) => member.team === RoomTeam.A);
+    const teamB = activeMembers.filter((member) => member.team === RoomTeam.B);
+
+    return {
+      activePlayerCount: activeMembers.length,
+      maxPlayers,
+      readyPlayerCount: readyMembers.length,
+      isFull: activeMembers.length === maxPlayers,
+      isAllReady:
+        activeMembers.length === maxPlayers &&
+        activeMembers.every((member) => member.isReady),
+      isExpired: Boolean(room.expiresAt && room.expiresAt.getTime() < Date.now()),
+      teamSummary: {
+        A: {
+          count: teamA.length,
+          roles: teamA.map((member) => member.role).filter(Boolean),
+        },
+        B: {
+          count: teamB.length,
+          roles: teamB.map((member) => member.role).filter(Boolean),
+        },
+      },
+    };
   }
 }
