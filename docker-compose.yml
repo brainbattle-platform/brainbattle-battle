@@ -17,6 +17,8 @@ services:
         condition: service_healthy
       battle-redis:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: npm run start:dev
 
   battle-db:

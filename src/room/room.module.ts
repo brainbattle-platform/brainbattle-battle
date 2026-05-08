@@ -1,12 +1,11 @@
 import { Module } from '@nestjs/common';
+import { AdminRoomController } from './admin-room.controller';
 import { RoomController } from './room.controller';
 import { RoomService } from './room.service';
-import { RoomSweeper } from './room.sweeper';
-import { WsModule } from '../ws/ws.module';
 
 @Module({
-  imports: [WsModule], // ✅ QUAN TRỌNG
-  controllers: [RoomController],
-  providers: [RoomService, RoomSweeper],
+  controllers: [RoomController, AdminRoomController],
+  providers: [RoomService],
+  exports: [RoomService],
 })
 export class RoomModule {}
