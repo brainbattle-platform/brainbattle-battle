@@ -84,4 +84,20 @@ export class BattleController {
   ) {
     return this.battleService.submitAnswer(user.id, battleId, dto);
   }
+  @Post(':battleId/finish')
+  @ApiOperation({ summary: 'Finish battle and calculate result' })
+  @ApiParam({ name: 'battleId' })
+  finishBattle(
+    @CurrentUser() user: AuthUser,
+    @Param('battleId') battleId: string,
+  ) {
+    return this.battleService.finishBattle(user.id, battleId);
+  }
+
+  @Get(':battleId/result')
+  @ApiOperation({ summary: 'Get battle result' })
+  @ApiParam({ name: 'battleId' })
+  getResult(@Param('battleId') battleId: string) {
+    return this.battleService.getResult(battleId);
+  }
 }

@@ -326,6 +326,74 @@ export class BattleService {
     };
   }
 
+  async finishBattle(userId: string, battleId: string) {
+    const battle = await this.getBattleOrThrow(battleId);
+
+    if (battle.createdBy !== userId) {
+      throw new ForbiddenException('Only battle creator can finish battle');
+    }
+
+    if (battle.status !== BattleStatus.RUNNING) {
+      throw new BadRequestException('Battle is not running');
+    }
+
+    const resultUpdates = this.calculateBattleResults(battle);
+
+    const updatedBattle = await this.prisma.$transaction(async (tx) => {
+      for (const update of resultUpdates) {
+        await tx.battlePlayer.update({
+          where: {
+            battleId_userId: {
+              battleId,
+              userId: update.userId,
+            },
+          },
+          data: {
+            result: update.result,
+          },
+        });
+      }
+
+      await tx.battleSession.update({
+        where: { id: battleId },
+        data: {
+          status: BattleStatus.FINISHED,
+          finishedAt: new Date(),
+        },
+      });
+
+      await tx.battleRoom.update({
+        where: { id: battle.roomId },
+        data: {
+          status: BattleRoomStatus.FINISHED,
+          closedAt: new Date(),
+          closeReason: 'BATTLE_FINISHED',
+        },
+      });
+
+      return tx.battleSession.findUniqueOrThrow({
+        where: { id: battleId },
+        include: {
+          players: true,
+          questions: true,
+          submissions: true,
+        },
+      });
+    });
+
+    return toBattleResponse(updatedBattle);
+  }
+
+  async getResult(battleId: string) {
+    const battle = await this.getBattleOrThrow(battleId);
+
+    if (battle.status !== BattleStatus.FINISHED) {
+      throw new BadRequestException('Battle is not finished');
+    }
+
+    return toBattleResponse(battle);
+  }
+
   private async getBattleOrThrow(battleId: string) {
     return this.prisma.battleSession.findUniqueOrThrow({
       where: { id: battleId },
@@ -569,5 +637,168 @@ export class BattleService {
     if (!players.some((player) => player.userId === userId)) {
       throw new ForbiddenException('You are not in this battle');
     }
+  }
+  private calculateBattleResults(battle: {
+    format: BattleFormat;
+    players: Array<{
+      userId: string;
+      team: RoomTeam;
+      score: number;
+      correctCount: number;
+      totalResponseTimeMs: number;
+    }>;
+  }) {
+    if (battle.format === BattleFormat.DUEL_1V1) {
+      return this.calculateDuelResult(battle.players);
+    }
+
+    return this.calculateTeam3v3Result(battle.players);
+  }
+
+  private calculateDuelResult(
+    players: Array<{
+      userId: string;
+      score: number;
+      correctCount: number;
+      totalResponseTimeMs: number;
+    }>,
+  ) {
+    if (players.length !== 2) {
+      throw new BadRequestException('DUEL_1V1 result requires exactly 2 players');
+    }
+
+    const [p1, p2] = players;
+
+    const winner = this.comparePlayers(p1, p2);
+
+    if (winner === 1) {
+      return [
+        { userId: p1.userId, result: BattlePlayerResult.WIN },
+        { userId: p2.userId, result: BattlePlayerResult.LOSE },
+      ];
+    }
+
+    if (winner === 2) {
+      return [
+        { userId: p1.userId, result: BattlePlayerResult.LOSE },
+        { userId: p2.userId, result: BattlePlayerResult.WIN },
+      ];
+    }
+
+    return [
+      { userId: p1.userId, result: BattlePlayerResult.DRAW },
+      { userId: p2.userId, result: BattlePlayerResult.DRAW },
+    ];
+  }
+
+  private calculateTeam3v3Result(
+    players: Array<{
+      userId: string;
+      team: RoomTeam;
+      score: number;
+      correctCount: number;
+      totalResponseTimeMs: number;
+    }>,
+  ) {
+    const teamA = players.filter((player) => player.team === RoomTeam.A);
+    const teamB = players.filter((player) => player.team === RoomTeam.B);
+
+    const summaryA = this.summarizeTeam(teamA);
+    const summaryB = this.summarizeTeam(teamB);
+
+    const winner = this.compareTeamSummaries(summaryA, summaryB);
+
+    if (winner === 1) {
+      return players.map((player) => ({
+        userId: player.userId,
+        result:
+          player.team === RoomTeam.A
+            ? BattlePlayerResult.WIN
+            : BattlePlayerResult.LOSE,
+      }));
+    }
+
+    if (winner === 2) {
+      return players.map((player) => ({
+        userId: player.userId,
+        result:
+          player.team === RoomTeam.B
+            ? BattlePlayerResult.WIN
+            : BattlePlayerResult.LOSE,
+      }));
+    }
+
+    return players.map((player) => ({
+      userId: player.userId,
+      result: BattlePlayerResult.DRAW,
+    }));
+  }
+
+  private comparePlayers(
+    p1: {
+      score: number;
+      correctCount: number;
+      totalResponseTimeMs: number;
+    },
+    p2: {
+      score: number;
+      correctCount: number;
+      totalResponseTimeMs: number;
+    },
+  ) {
+    if (p1.score > p2.score) return 1;
+    if (p2.score > p1.score) return 2;
+
+    if (p1.correctCount > p2.correctCount) return 1;
+    if (p2.correctCount > p1.correctCount) return 2;
+
+    if (p1.totalResponseTimeMs < p2.totalResponseTimeMs) return 1;
+    if (p2.totalResponseTimeMs < p1.totalResponseTimeMs) return 2;
+
+    return 0;
+  }
+
+  private summarizeTeam(
+    players: Array<{
+      score: number;
+      correctCount: number;
+      totalResponseTimeMs: number;
+    }>,
+  ) {
+    return {
+      score: players.reduce((sum, player) => sum + player.score, 0),
+      correctCount: players.reduce(
+        (sum, player) => sum + player.correctCount,
+        0,
+      ),
+      totalResponseTimeMs: players.reduce(
+        (sum, player) => sum + player.totalResponseTimeMs,
+        0,
+      ),
+    };
+  }
+
+  private compareTeamSummaries(
+    a: {
+      score: number;
+      correctCount: number;
+      totalResponseTimeMs: number;
+    },
+    b: {
+      score: number;
+      correctCount: number;
+      totalResponseTimeMs: number;
+    },
+  ) {
+    if (a.score > b.score) return 1;
+    if (b.score > a.score) return 2;
+
+    if (a.correctCount > b.correctCount) return 1;
+    if (b.correctCount > a.correctCount) return 2;
+
+    if (a.totalResponseTimeMs < b.totalResponseTimeMs) return 1;
+    if (b.totalResponseTimeMs < a.totalResponseTimeMs) return 2;
+
+    return 0;
   }
 }
