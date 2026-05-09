@@ -394,6 +394,106 @@ export class BattleService {
     return toBattleResponse(battle);
   }
 
+  async adminGetBattleDetail(battleId: string) {
+    const battle = await this.prisma.battleSession.findUniqueOrThrow({
+      where: { id: battleId },
+      include: {
+        players: true,
+        questions: true,
+        submissions: true,
+        room: {
+          include: {
+            members: true,
+          },
+        },
+      },
+    });
+
+    return {
+      id: battle.id,
+      roomId: battle.roomId,
+      format: battle.format,
+      skill: battle.skill,
+      isRanked: battle.isRanked,
+      status: battle.status,
+      questionCount: battle.questionCount,
+      createdBy: battle.createdBy,
+      createdAt: battle.createdAt,
+      startedAt: battle.startedAt,
+      finishedAt: battle.finishedAt,
+
+      room: {
+        id: battle.room.id,
+        code: battle.room.code,
+        status: battle.room.status,
+        hostUserId: battle.room.hostUserId,
+        members: battle.room.members
+          .filter((member) => !member.leftAt)
+          .map((member) => ({
+            userId: member.userId,
+            team: member.team,
+            role: member.role,
+            isReady: member.isReady,
+          })),
+      },
+
+      players: battle.players.map((player) => ({
+        userId: player.userId,
+        team: player.team,
+        role: player.role,
+        score: player.score,
+        correctCount: player.correctCount,
+        totalResponseTimeMs: player.totalResponseTimeMs,
+        result: player.result,
+      })),
+
+      questions: battle.questions
+        .sort((a, b) => {
+          if ((a.assignedRole ?? '') === (b.assignedRole ?? '')) {
+            return a.questionIndex - b.questionIndex;
+          }
+
+          return String(a.assignedRole ?? '').localeCompare(
+            String(b.assignedRole ?? ''),
+          );
+        })
+        .map((question) => ({
+          id: question.id,
+          questionIndex: question.questionIndex,
+          sourceQuestionId: question.sourceQuestionId,
+          sourceQuestionVersion: question.sourceQuestionVersion,
+          skill: question.skill,
+          difficulty: question.difficulty,
+          type: question.type,
+          assignedRole: question.assignedRole,
+          promptText: question.promptText,
+          media: question.mediaJson,
+          options: question.optionsJson,
+
+          correctOptionKey: question.correctOptionKey,
+          acceptedAnswers: question.acceptedAnswers,
+          explanation: question.explanation,
+
+          maxTimeSec: question.maxTimeSec,
+          baseScore: question.baseScore,
+          speedBonus: question.speedBonus,
+        })),
+
+      submissions: battle.submissions.map((submission) => ({
+        id: submission.id,
+        questionSnapshotId: submission.questionSnapshotId,
+        userId: submission.userId,
+        selectedOptionKey: submission.selectedOptionKey,
+        textAnswer: submission.textAnswer,
+        responseTimeMs: submission.responseTimeMs,
+        status: submission.status,
+        isCorrect: submission.isCorrect,
+        score: submission.score,
+        submittedAt: submission.submittedAt,
+      })),
+    };
+  }
+
   private async getBattleOrThrow(battleId: string) {
     return this.prisma.battleSession.findUniqueOrThrow({
       where: { id: battleId },
