@@ -75,6 +75,25 @@ enum QuestionMediaType {
   VIDEO
 }
 
+enum BattleStatus {
+  CREATED
+  RUNNING
+  FINISHED
+  CANCELLED
+}
+
+enum BattlePlayerResult {
+  WIN
+  LOSE
+  DRAW
+}
+
+enum BattleAnswerStatus {
+  CORRECT
+  WRONG
+  TIMEOUT
+}
+
 model BattleRoom {
   id         String           @id @default(uuid())
   code       String           @unique
@@ -95,6 +114,7 @@ model BattleRoom {
   updatedAt  DateTime         @updatedAt
 
   members    RoomMember[]
+  battle     BattleSession?
 
   @@index([status])
   @@index([code])
@@ -228,4 +248,123 @@ model QuestionReviewLog {
   @@index([questionId])
   @@index([actorUserId])
   @@index([createdAt])
+}
+
+model BattleSession {
+  id          String       @id @default(uuid())
+
+  roomId      String       @unique
+  room        BattleRoom   @relation(fields: [roomId], references: [id])
+
+  format      BattleFormat
+  skill       BattleSkill
+  isRanked    Boolean      @default(false)
+
+  status      BattleStatus @default(CREATED)
+
+  questionCount Int
+
+  createdBy   String
+
+  createdAt   DateTime     @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
+
+  players     BattlePlayer[]
+  questions   BattleQuestionSnapshot[]
+  submissions BattleAnswerSubmission[]
+
+  @@index([status])
+  @@index([roomId])
+  @@index([createdAt])
+}
+
+model BattlePlayer {
+  id                  String              @id @default(uuid())
+
+  battleId            String
+  battle              BattleSession       @relation(fields: [battleId], references: [id], onDelete: Cascade)
+
+  userId              String
+  team                RoomTeam
+  role                BattleRole?
+
+  score               Int                 @default(0)
+  correctCount        Int                 @default(0)
+  totalResponseTimeMs Int                 @default(0)
+
+  result              BattlePlayerResult?
+
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@unique([battleId, userId])
+  @@index([battleId])
+  @@index([userId])
+}
+
+model BattleQuestionSnapshot {
+  id                    String              @id @default(uuid())
+
+  battleId              String
+  battle                BattleSession       @relation(fields: [battleId], references: [id], onDelete: Cascade)
+
+  sourceQuestionId      String
+  sourceQuestionVersion Int
+
+  questionIndex         Int
+
+  skill                 QuestionSkill
+  difficulty            QuestionDifficulty
+  type                  QuestionType
+
+  promptText            String?
+  explanation           String?
+
+  mediaJson             Json
+  optionsJson           Json
+
+  correctOptionKey      String?
+  acceptedAnswers       String[]            @default([])
+
+  maxTimeSec            Int
+  baseScore             Int
+  speedBonus            Int
+
+  assignedRole          BattleRole?
+
+  createdAt             DateTime            @default(now())
+
+  submissions           BattleAnswerSubmission[]
+
+  @@unique([battleId, questionIndex, assignedRole])
+  @@index([battleId])
+  @@index([sourceQuestionId])
+  @@index([assignedRole])
+}
+
+model BattleAnswerSubmission {
+  id                  String                  @id @default(uuid())
+
+  battleId            String
+  battle              BattleSession           @relation(fields: [battleId], references: [id], onDelete: Cascade)
+
+  questionSnapshotId  String
+  questionSnapshot    BattleQuestionSnapshot  @relation(fields: [questionSnapshotId], references: [id])
+
+  userId              String
+
+  selectedOptionKey   String?
+  textAnswer          String?
+
+  responseTimeMs      Int
+  status              BattleAnswerStatus
+  isCorrect           Boolean
+  score               Int
+
+  submittedAt         DateTime                @default(now())
+
+  @@unique([questionSnapshotId, userId])
+  @@index([battleId])
+  @@index([userId])
 }
