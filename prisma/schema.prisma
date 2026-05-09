@@ -39,6 +39,42 @@ enum BattleRoomStatus {
   EXPIRED
 }
 
+enum QuestionSource {
+  ADMIN_CREATED
+  IMPORTED_FROM_LEARNING
+}
+
+enum QuestionStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+enum QuestionSkill {
+  GRAMMAR
+  LISTENING
+  VOCABULARY
+}
+
+enum QuestionDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum QuestionType {
+  MULTIPLE_CHOICE
+  FILL_BLANK
+}
+
+enum QuestionMediaType {
+  IMAGE
+  AUDIO
+  VIDEO
+}
+
 model BattleRoom {
   id         String           @id @default(uuid())
   code       String           @unique
@@ -85,4 +121,111 @@ model RoomMember {
   @@unique([roomId, team, role])
   @@index([userId])
   @@index([roomId, leftAt])
+}
+
+model BattleQuestion {
+  id                 String             @id @default(uuid())
+
+  questionGroupId    String
+  version            Int                @default(1)
+
+  source             QuestionSource
+  externalSource     String?
+  externalQuestionId String?
+  sourceVersion      String?
+  contentHash        String?
+
+  status             QuestionStatus     @default(DRAFT)
+
+  skill              QuestionSkill
+  difficulty         QuestionDifficulty
+  type               QuestionType
+
+  promptText         String?
+  explanation        String?
+
+  correctOptionKey   String?
+  acceptedAnswers    String[]           @default([])
+
+  maxTimeSec         Int
+  baseScore          Int                @default(100)
+  speedBonus         Int                @default(50)
+
+  createdBy          String
+  updatedBy          String?
+  submittedBy        String?
+  submittedAt        DateTime?
+  approvedBy         String?
+  approvedAt         DateTime?
+  rejectedBy         String?
+  rejectedAt         DateTime?
+  rejectedReason     String?
+  archivedBy         String?
+  archivedAt         DateTime?
+
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  options            BattleQuestionOption[]
+  media              BattleQuestionMedia[]
+  reviewLogs         QuestionReviewLog[]
+
+  @@unique([questionGroupId, version])
+  @@index([status])
+  @@index([skill, difficulty, type])
+  @@index([source])
+  @@index([externalSource, externalQuestionId])
+  @@index([createdAt])
+}
+
+model BattleQuestionOption {
+  id          String         @id @default(uuid())
+
+  questionId  String
+  question    BattleQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  key         String
+  text        String?
+  mediaUrl    String?
+  orderIndex  Int            @default(0)
+
+  createdAt   DateTime       @default(now())
+
+  @@unique([questionId, key])
+  @@index([questionId])
+}
+
+model BattleQuestionMedia {
+  id          String            @id @default(uuid())
+
+  questionId  String
+  question    BattleQuestion    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  type        QuestionMediaType
+  url         String
+  durationSec Int?
+  mimeType    String?
+  orderIndex  Int               @default(0)
+
+  createdAt   DateTime          @default(now())
+
+  @@index([questionId])
+  @@index([type])
+}
+
+model QuestionReviewLog {
+  id          String         @id @default(uuid())
+
+  questionId  String
+  question    BattleQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  action      String
+  actorUserId String
+  note        String?
+
+  createdAt   DateTime       @default(now())
+
+  @@index([questionId])
+  @@index([actorUserId])
+  @@index([createdAt])
 }
