@@ -4,7 +4,9 @@ import {
   Injectable,
 } from '@nestjs/common';
 import {
+  BattleAnswerStatus,
   BattleFormat,
+  BattlePlayerResult,
   BattleRole,
   BattleRoomStatus,
   BattleSkill,
@@ -12,11 +14,15 @@ import {
   Prisma,
   QuestionSkill,
   QuestionStatus,
+  QuestionType,
   RoomTeam,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoomService } from '../room/room.service';
-import { CreateBattleFromRoomDto } from './dto';
+import {
+  CreateBattleFromRoomDto,
+  SubmitAnswerDto,
+} from './dto';
 import { toBattleResponse } from './battle.mapper';
 
 @Injectable()
@@ -24,7 +30,7 @@ export class BattleService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly roomService: RoomService,
-  ) {}
+  ) { }
 
   async createFromRoom(userId: string, roomId: string, dto: CreateBattleFromRoomDto) {
     const questionCount = dto.questionCount ?? 10;
@@ -144,12 +150,189 @@ export class BattleService {
     return toBattleResponse(battle);
   }
 
+  async startBattle(userId: string, battleId: string) {
+    const battle = await this.getBattleOrThrow(battleId);
+
+    if (battle.createdBy !== userId) {
+      throw new ForbiddenException('Only battle creator can start battle');
+    }
+
+    if (battle.status !== BattleStatus.CREATED) {
+      throw new BadRequestException('Battle cannot be started');
+    }
+
+    const updated = await this.prisma.battleSession.update({
+      where: { id: battleId },
+      data: {
+        status: BattleStatus.RUNNING,
+        startedAt: new Date(),
+      },
+      include: {
+        players: true,
+        questions: true,
+        submissions: true,
+      },
+    });
+
+    return toBattleResponse(updated);
+  }
+
+  async getPublicQuestions(userId: string, battleId: string) {
+    const battle = await this.getBattleOrThrow(battleId);
+
+    this.assertPlayerInBattle(userId, battle.players);
+
+    if (battle.status !== BattleStatus.RUNNING) {
+      throw new BadRequestException('Battle is not running');
+    }
+
+    const player = battle.players.find((item) => item.userId === userId)!;
+
+    const questions = battle.questions
+      .filter((question) => {
+        if (battle.format === BattleFormat.DUEL_1V1) {
+          return question.assignedRole === null;
+        }
+
+        return question.assignedRole === player.role;
+      })
+      .sort((a, b) => a.questionIndex - b.questionIndex)
+      .map((question) => ({
+        id: question.id,
+        questionIndex: question.questionIndex,
+        skill: question.skill,
+        difficulty: question.difficulty,
+        type: question.type,
+        assignedRole: question.assignedRole,
+        promptText: question.promptText,
+        media: question.mediaJson,
+        options: question.optionsJson,
+        maxTimeSec: question.maxTimeSec,
+        baseScore: question.baseScore,
+        speedBonus: question.speedBonus,
+      }));
+
+    return {
+      battleId: battle.id,
+      status: battle.status,
+      format: battle.format,
+      player: {
+        userId: player.userId,
+        team: player.team,
+        role: player.role,
+      },
+      questions,
+    };
+  }
+
+  async submitAnswer(userId: string, battleId: string, dto: SubmitAnswerDto) {
+    const battle = await this.getBattleOrThrow(battleId);
+
+    this.assertPlayerInBattle(userId, battle.players);
+
+    if (battle.status !== BattleStatus.RUNNING) {
+      throw new BadRequestException('Battle is not running');
+    }
+
+    const player = battle.players.find((item) => item.userId === userId)!;
+
+    const question = battle.questions.find(
+      (item) => item.id === dto.questionSnapshotId,
+    );
+
+    if (!question) {
+      throw new BadRequestException('Question does not belong to this battle');
+    }
+
+    if (battle.format === BattleFormat.TEAM_3V3) {
+      if (question.assignedRole !== player.role) {
+        throw new ForbiddenException('This question is not assigned to your role');
+      }
+    }
+
+    const alreadySubmitted = battle.submissions.some(
+      (submission) =>
+        submission.userId === userId &&
+        submission.questionSnapshotId === dto.questionSnapshotId,
+    );
+
+    if (alreadySubmitted) {
+      throw new BadRequestException('Answer already submitted');
+    }
+
+    const answerResult = this.evaluateAnswer(question, dto);
+    const score = answerResult.isCorrect
+      ? this.calculateScore(
+        question.baseScore,
+        question.speedBonus,
+        question.maxTimeSec,
+        dto.responseTimeMs,
+      )
+      : 0;
+
+    const updatedBattle = await this.prisma.$transaction(async (tx) => {
+      await tx.battleAnswerSubmission.create({
+        data: {
+          battleId,
+          questionSnapshotId: question.id,
+          userId,
+          selectedOptionKey: dto.selectedOptionKey?.trim().toUpperCase(),
+          textAnswer: dto.textAnswer?.trim(),
+          responseTimeMs: dto.responseTimeMs,
+          status: answerResult.status,
+          isCorrect: answerResult.isCorrect,
+          score,
+        },
+      });
+
+      await tx.battlePlayer.update({
+        where: {
+          battleId_userId: {
+            battleId,
+            userId,
+          },
+        },
+        data: {
+          score: {
+            increment: score,
+          },
+          correctCount: {
+            increment: answerResult.isCorrect ? 1 : 0,
+          },
+          totalResponseTimeMs: {
+            increment: answerResult.isCorrect ? dto.responseTimeMs : 0,
+          },
+        },
+      });
+
+      return tx.battleSession.findUniqueOrThrow({
+        where: { id: battleId },
+        include: {
+          players: true,
+          questions: true,
+          submissions: true,
+        },
+      });
+    });
+
+    return {
+      submission: {
+        questionSnapshotId: question.id,
+        isCorrect: answerResult.isCorrect,
+        status: answerResult.status,
+        score,
+      },
+      battle: toBattleResponse(updatedBattle),
+    };
+  }
+
   private async getBattleOrThrow(battleId: string) {
     return this.prisma.battleSession.findUniqueOrThrow({
       where: { id: battleId },
       include: {
         players: true,
         questions: true,
+        submissions: true,
       },
     });
   }
@@ -303,5 +486,88 @@ export class BattleService {
     if (role === BattleRole.GRAMMAR) return QuestionSkill.GRAMMAR;
     if (role === BattleRole.LISTENING) return QuestionSkill.LISTENING;
     return QuestionSkill.VOCABULARY;
+  }
+  private evaluateAnswer(
+    question: {
+      type: QuestionType;
+      correctOptionKey: string | null;
+      acceptedAnswers: string[];
+      maxTimeSec: number;
+    },
+    dto: SubmitAnswerDto,
+  ) {
+    if (dto.responseTimeMs > question.maxTimeSec * 1000) {
+      return {
+        isCorrect: false,
+        status: BattleAnswerStatus.TIMEOUT,
+      };
+    }
+
+    if (question.type === QuestionType.MULTIPLE_CHOICE) {
+      const selected = dto.selectedOptionKey?.trim().toUpperCase();
+
+      if (!selected) {
+        throw new BadRequestException('selectedOptionKey is required for MCQ');
+      }
+
+      const correct = question.correctOptionKey?.trim().toUpperCase();
+
+      return {
+        isCorrect: selected === correct,
+        status:
+          selected === correct
+            ? BattleAnswerStatus.CORRECT
+            : BattleAnswerStatus.WRONG,
+      };
+    }
+
+    if (question.type === QuestionType.FILL_BLANK) {
+      const answer = dto.textAnswer?.trim();
+
+      if (!answer) {
+        throw new BadRequestException('textAnswer is required for FILL_BLANK');
+      }
+
+      const normalizedAnswer = this.normalizeTextAnswer(answer);
+
+      const accepted = question.acceptedAnswers.map((item) =>
+        this.normalizeTextAnswer(item),
+      );
+
+      const isCorrect = accepted.includes(normalizedAnswer);
+
+      return {
+        isCorrect,
+        status: isCorrect ? BattleAnswerStatus.CORRECT : BattleAnswerStatus.WRONG,
+      };
+    }
+
+    throw new BadRequestException('Unsupported question type');
+  }
+
+  private calculateScore(
+    baseScore: number,
+    speedBonus: number,
+    maxTimeSec: number,
+    responseTimeMs: number,
+  ) {
+    const responseTimeSec = responseTimeMs / 1000;
+    const ratio = 1 - responseTimeSec / maxTimeSec;
+    const safeRatio = Math.max(0, Math.min(1, ratio));
+
+    return Math.round(baseScore + speedBonus * safeRatio);
+  }
+
+  private normalizeTextAnswer(value: string) {
+    return value.trim().toLowerCase();
+  }
+
+  private assertPlayerInBattle(
+    userId: string,
+    players: Array<{ userId: string }>,
+  ) {
+    if (!players.some((player) => player.userId === userId)) {
+      throw new ForbiddenException('You are not in this battle');
+    }
   }
 }

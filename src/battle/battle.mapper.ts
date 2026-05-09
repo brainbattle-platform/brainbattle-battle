@@ -1,4 +1,5 @@
 import {
+  BattleAnswerSubmission,
   BattlePlayer,
   BattleQuestionSnapshot,
   BattleSession,
@@ -7,6 +8,7 @@ import {
 type BattleWithRelations = BattleSession & {
   players: BattlePlayer[];
   questions: BattleQuestionSnapshot[];
+  submissions?: BattleAnswerSubmission[];
 };
 
 export function toBattleResponse(battle: BattleWithRelations) {
@@ -35,7 +37,15 @@ export function toBattleResponse(battle: BattleWithRelations) {
     })),
 
     questions: battle.questions
-      .sort((a, b) => a.questionIndex - b.questionIndex)
+      .sort((a, b) => {
+        if ((a.assignedRole ?? '') === (b.assignedRole ?? '')) {
+          return a.questionIndex - b.questionIndex;
+        }
+
+        return String(a.assignedRole ?? '').localeCompare(
+          String(b.assignedRole ?? ''),
+        );
+      })
       .map((question) => ({
         id: question.id,
         questionIndex: question.questionIndex,
@@ -52,5 +62,18 @@ export function toBattleResponse(battle: BattleWithRelations) {
         baseScore: question.baseScore,
         speedBonus: question.speedBonus,
       })),
+
+    submissions: battle.submissions?.map((submission) => ({
+      id: submission.id,
+      questionSnapshotId: submission.questionSnapshotId,
+      userId: submission.userId,
+      selectedOptionKey: submission.selectedOptionKey,
+      textAnswer: submission.textAnswer,
+      responseTimeMs: submission.responseTimeMs,
+      status: submission.status,
+      isCorrect: submission.isCorrect,
+      score: submission.score,
+      submittedAt: submission.submittedAt,
+    })),
   };
 }
