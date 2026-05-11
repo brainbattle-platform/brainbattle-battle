@@ -1,11 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import {
-  BattlePlayerResult,
-  RewardSourceType,
-} from '@prisma/client';
+import { BattlePlayerResult, RewardSourceType } from '@prisma/client';
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RewardService } from '../reward/reward.service';
+import { AuthProfileSyncClient } from './auth-profile-sync.client';
 import { RankService } from './rank.service';
 
 @Injectable()
@@ -14,19 +12,20 @@ export class RankRewardService {
     private readonly prisma: PrismaService,
     private readonly rankService: RankService,
     private readonly rewardService: RewardService,
+    private readonly authProfileSyncClient: AuthProfileSyncClient,
   ) {}
 
   async processBattleResult(battleId: string) {
-    const existingSettlement =
-      await this.prisma.battleSettlement.findUnique({
-        where: { battleId },
-      });
+    const existingSettlement = await this.prisma.battleSettlement.findUnique({
+      where: { battleId },
+    });
 
     if (existingSettlement) {
+      await this.syncProfilesAfterSettlement(battleId);
       return existingSettlement;
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const settlement = await this.prisma.$transaction(async (tx) => {
       const battle = await tx.battleSession.findUniqueOrThrow({
         where: { id: battleId },
         include: {
@@ -84,18 +83,15 @@ export class RankRewardService {
             },
 
             winCount: {
-              increment:
-                player.result === BattlePlayerResult.WIN ? 1 : 0,
+              increment: player.result === BattlePlayerResult.WIN ? 1 : 0,
             },
 
             drawCount: {
-              increment:
-                player.result === BattlePlayerResult.DRAW ? 1 : 0,
+              increment: player.result === BattlePlayerResult.DRAW ? 1 : 0,
             },
 
             loseCount: {
-              increment:
-                player.result === BattlePlayerResult.LOSE ? 1 : 0,
+              increment: player.result === BattlePlayerResult.LOSE ? 1 : 0,
             },
 
             currentStreak: nextStreak,
@@ -122,20 +118,17 @@ export class RankRewardService {
           },
         });
 
-        const assignedQuestions =
-          battle.questions.filter((question) => {
-            if (battle.format === 'DUEL_1V1') {
-              return true;
-            }
+        const assignedQuestions = battle.questions.filter((question) => {
+          if (battle.format === 'DUEL_1V1') {
+            return true;
+          }
 
-            return question.assignedRole === player.role;
-          }).length;
+          return question.assignedRole === player.role;
+        }).length;
 
-        const answeredQuestions =
-          battle.submissions.filter(
-            (submission) =>
-              submission.userId === player.userId,
-          ).length;
+        const answeredQuestions = battle.submissions.filter(
+          (submission) => submission.userId === player.userId,
+        ).length;
 
         const rewards = this.rewardService.calculateRewards({
           format: battle.format,
@@ -208,6 +201,46 @@ export class RankRewardService {
         },
       });
     });
+
+    await this.syncProfilesAfterSettlement(battleId);
+
+    return settlement;
+  }
+
+  private async syncProfilesAfterSettlement(battleId: string) {
+    const battle = await this.prisma.battleSession.findUniqueOrThrow({
+      where: { id: battleId },
+      include: {
+        players: true,
+      },
+    });
+
+    for (const player of battle.players) {
+      const profile = await this.prisma.playerRankProfile.findUnique({
+        where: {
+          userId: player.userId,
+        },
+        include: {
+          rewardWallet: true,
+        },
+      });
+
+      if (!profile) {
+        continue;
+      }
+
+      await this.authProfileSyncClient.syncRankProfile({
+        userId: player.userId,
+        rankTier: profile.rankTier,
+        stars: profile.stars,
+        seasonId: profile.seasonId,
+        winCount: profile.winCount,
+        drawCount: profile.drawCount,
+        loseCount: profile.loseCount,
+        totalBattles: profile.totalBattles,
+        brainPointBalance: profile.rewardWallet?.brainPointBalance ?? 0,
+      });
+    }
   }
 
   private compareTier(a: string, b: string) {

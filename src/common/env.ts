@@ -12,4 +12,8 @@ export const env = {
   REDIS_URL: process.env.REDIS_URL ?? '',
   REDIS_HOST: process.env.REDIS_HOST ?? 'localhost',
   REDIS_PORT: Number(process.env.REDIS_PORT ?? 6379),
+
+  AUTH_PROFILE_SYNC_URL: process.env.AUTH_PROFILE_SYNC_URL ?? '',
+  AUTH_INTERNAL_SERVICE_KEY: process.env.AUTH_INTERNAL_SERVICE_KEY ?? '',
+  AUTH_PROFILE_SYNC_ENABLED: process.env.AUTH_PROFILE_SYNC_ENABLED === 'true',
 };
