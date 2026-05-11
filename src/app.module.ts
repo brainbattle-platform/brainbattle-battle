@@ -4,7 +4,9 @@ import { BattleModule } from './battle/battle.module';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { QuestionModule } from './question/question.module';
+import { RankModule } from './rank/rank.module';
 import { RedisModule } from './redis/redis.module';
+import { RewardModule } from './reward/reward.module';
 import { RoomModule } from './room/room.module';
 
 @Module({
@@ -15,6 +17,8 @@ import { RoomModule } from './room/room.module';
     HealthModule,
     RoomModule,
     QuestionModule,
+    RewardModule,
+    RankModule,
     BattleModule,
   ],
 })

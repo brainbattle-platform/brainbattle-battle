@@ -26,12 +26,14 @@ import {
   SubmitAnswerDto,
 } from './dto';
 import { toBattleResponse } from './battle.mapper';
+import { RankRewardService } from '../rank/rank-reward.service';
 
 @Injectable()
 export class BattleService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly roomService: RoomService,
+    private readonly rankRewardService: RankRewardService,
   ) { }
 
   async createFromRoom(userId: string, roomId: string, dto: CreateBattleFromRoomDto) {
@@ -383,7 +385,10 @@ export class BattleService {
       });
     });
 
-    return toBattleResponse(updatedBattle);
+    await this.rankRewardService.processBattleResult(battleId);
+
+    const settledBattle = await this.getBattleOrThrow(battleId);
+    return toBattleResponse(settledBattle);
   }
 
   async getResult(battleId: string) {
@@ -721,6 +726,11 @@ export class BattleService {
     };
   }
 
+  async adminGetSettlement(battleId: string) {
+    return this.prisma.battleSettlement.findUnique({
+      where: { battleId },
+    });
+  }
 
   private async getBattleOrThrow(battleId: string) {
     return this.prisma.battleSession.findUniqueOrThrow({
