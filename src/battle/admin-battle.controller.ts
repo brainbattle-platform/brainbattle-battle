@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Get,
   Param,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -14,6 +15,7 @@ import {
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { AdminListBattlesDto } from './dto';
 import { BattleService } from './battle.service';
 
 @ApiTags('admin/battles')
@@ -22,6 +24,19 @@ import { BattleService } from './battle.service';
 @Controller('admin/battles')
 export class AdminBattleController {
   constructor(private readonly battleService: BattleService) {}
+
+  @Get()
+  @ApiOperation({
+    summary: 'Admin list battles',
+    description: 'Filter battles by status, format, roomId, or userId.',
+  })
+  listBattles(
+    @CurrentUser() user: AuthUser,
+    @Query() query: AdminListBattlesDto,
+  ) {
+    this.assertAdmin(user);
+    return this.battleService.adminListBattles(query);
+  }
 
   @Get(':battleId')
   @ApiOperation({
