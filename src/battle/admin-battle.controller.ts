@@ -17,13 +17,17 @@ import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AdminListBattlesDto } from './dto';
 import { BattleService } from './battle.service';
+import { SettlementPayloadService } from '../reward/settlement-payload.service';
 
 @ApiTags('admin/battles')
 @ApiBearerAuth('bearer')
 @UseGuards(AuthGuard)
 @Controller('admin/battles')
 export class AdminBattleController {
-  constructor(private readonly battleService: BattleService) { }
+  constructor(
+    private readonly battleService: BattleService,
+    private readonly settlementPayloadService: SettlementPayloadService,
+  ) { }
 
   @Get()
   @ApiOperation({
@@ -71,5 +75,20 @@ export class AdminBattleController {
   ) {
     this.assertAdmin(user);
     return this.battleService.adminGetSettlement(battleId);
+  }
+
+  @Get(':battleId/settlement-payload')
+  @ApiOperation({
+    summary: 'Admin get blockchain-ready settlement payload',
+    description:
+      'Preview off-chain settlement payload/hash before future smart contract sync.',
+  })
+  @ApiParam({ name: 'battleId' })
+  getSettlementPayload(
+    @CurrentUser() user: AuthUser,
+    @Param('battleId') battleId: string,
+  ) {
+    this.assertAdmin(user);
+    return this.settlementPayloadService.buildBattleSettlementPayload(battleId);
   }
 }
