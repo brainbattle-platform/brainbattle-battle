@@ -94,27 +94,49 @@ enum BattleAnswerStatus {
   TIMEOUT
 }
 
+enum RankTier {
+  BRONZE
+  SILVER
+  GOLD
+  CHALLENGER
+}
+
+enum RewardLedgerType {
+  PARTICIPATION
+  RESULT
+  PERFORMANCE
+  STREAK
+  PENALTY
+  ADMIN
+}
+
+enum RewardSourceType {
+  BATTLE
+  SEASON
+  ADMIN
+}
+
 model BattleRoom {
-  id         String           @id @default(uuid())
-  code       String           @unique
+  id         String @id @default(uuid())
+  code       String @unique
   hostUserId String
 
-  format     BattleFormat
-  skill      BattleSkill
-  isRanked   Boolean          @default(false)
+  format   BattleFormat
+  skill    BattleSkill
+  isRanked Boolean      @default(false)
 
-  status     BattleRoomStatus @default(WAITING)
+  status BattleRoomStatus @default(WAITING)
 
-  expiresAt  DateTime?
-  startedAt  DateTime?
-  closedAt   DateTime?
+  expiresAt   DateTime?
+  startedAt   DateTime?
+  closedAt    DateTime?
   closeReason String?
 
-  createdAt  DateTime         @default(now())
-  updatedAt  DateTime         @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  members    RoomMember[]
-  battle     BattleSession?
+  members RoomMember[]
+  battle  BattleSession?
 
   @@index([status])
   @@index([code])
@@ -123,19 +145,19 @@ model BattleRoom {
 }
 
 model RoomMember {
-  id        String     @id @default(uuid())
+  id String @id @default(uuid())
 
-  roomId    String
-  room      BattleRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  roomId String
+  room   BattleRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
 
-  userId    String
-  team      RoomTeam
-  role      BattleRole?
+  userId String
+  team   RoomTeam
+  role   BattleRole?
 
-  isReady   Boolean    @default(false)
+  isReady Boolean @default(false)
 
-  joinedAt  DateTime   @default(now())
-  leftAt    DateTime?
+  joinedAt DateTime  @default(now())
+  leftAt   DateTime?
 
   @@unique([roomId, userId])
   @@unique([roomId, team, role])
@@ -144,10 +166,10 @@ model RoomMember {
 }
 
 model BattleQuestion {
-  id                 String             @id @default(uuid())
+  id String @id @default(uuid())
 
-  questionGroupId    String
-  version            Int                @default(1)
+  questionGroupId String
+  version         Int    @default(1)
 
   source             QuestionSource
   externalSource     String?
@@ -155,40 +177,40 @@ model BattleQuestion {
   sourceVersion      String?
   contentHash        String?
 
-  status             QuestionStatus     @default(DRAFT)
+  status QuestionStatus @default(DRAFT)
 
-  skill              QuestionSkill
-  difficulty         QuestionDifficulty
-  type               QuestionType
+  skill      QuestionSkill
+  difficulty QuestionDifficulty
+  type       QuestionType
 
-  promptText         String?
-  explanation        String?
+  promptText  String?
+  explanation String?
 
-  correctOptionKey   String?
-  acceptedAnswers    String[]           @default([])
+  correctOptionKey String?
+  acceptedAnswers  String[] @default([])
 
-  maxTimeSec         Int
-  baseScore          Int                @default(100)
-  speedBonus         Int                @default(50)
+  maxTimeSec Int
+  baseScore  Int @default(100)
+  speedBonus Int @default(50)
 
-  createdBy          String
-  updatedBy          String?
-  submittedBy        String?
-  submittedAt        DateTime?
-  approvedBy         String?
-  approvedAt         DateTime?
-  rejectedBy         String?
-  rejectedAt         DateTime?
-  rejectedReason     String?
-  archivedBy         String?
-  archivedAt         DateTime?
+  createdBy      String
+  updatedBy      String?
+  submittedBy    String?
+  submittedAt    DateTime?
+  approvedBy     String?
+  approvedAt     DateTime?
+  rejectedBy     String?
+  rejectedAt     DateTime?
+  rejectedReason String?
+  archivedBy     String?
+  archivedAt     DateTime?
 
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  options            BattleQuestionOption[]
-  media              BattleQuestionMedia[]
-  reviewLogs         QuestionReviewLog[]
+  options    BattleQuestionOption[]
+  media      BattleQuestionMedia[]
+  reviewLogs QuestionReviewLog[]
 
   @@unique([questionGroupId, version])
   @@index([status])
@@ -199,27 +221,27 @@ model BattleQuestion {
 }
 
 model BattleQuestionOption {
-  id          String         @id @default(uuid())
+  id String @id @default(uuid())
 
-  questionId  String
-  question    BattleQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  questionId String
+  question   BattleQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
 
-  key         String
-  text        String?
-  mediaUrl    String?
-  orderIndex  Int            @default(0)
+  key        String
+  text       String?
+  mediaUrl   String?
+  orderIndex Int     @default(0)
 
-  createdAt   DateTime       @default(now())
+  createdAt DateTime @default(now())
 
   @@unique([questionId, key])
   @@index([questionId])
 }
 
 model BattleQuestionMedia {
-  id          String            @id @default(uuid())
+  id String @id @default(uuid())
 
-  questionId  String
-  question    BattleQuestion    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  questionId String
+  question   BattleQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
 
   type        QuestionMediaType
   url         String
@@ -227,23 +249,23 @@ model BattleQuestionMedia {
   mimeType    String?
   orderIndex  Int               @default(0)
 
-  createdAt   DateTime          @default(now())
+  createdAt DateTime @default(now())
 
   @@index([questionId])
   @@index([type])
 }
 
 model QuestionReviewLog {
-  id          String         @id @default(uuid())
+  id String @id @default(uuid())
 
-  questionId  String
-  question    BattleQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  questionId String
+  question   BattleQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
 
   action      String
   actorUserId String
   note        String?
 
-  createdAt   DateTime       @default(now())
+  createdAt DateTime @default(now())
 
   @@index([questionId])
   @@index([actorUserId])
@@ -251,28 +273,30 @@ model QuestionReviewLog {
 }
 
 model BattleSession {
-  id          String       @id @default(uuid())
+  id String @id @default(uuid())
 
-  roomId      String       @unique
-  room        BattleRoom   @relation(fields: [roomId], references: [id])
+  roomId String     @unique
+  room   BattleRoom @relation(fields: [roomId], references: [id])
 
-  format      BattleFormat
-  skill       BattleSkill
-  isRanked    Boolean      @default(false)
+  format   BattleFormat
+  skill    BattleSkill
+  isRanked Boolean      @default(false)
 
-  status      BattleStatus @default(CREATED)
+  status BattleStatus @default(CREATED)
 
   questionCount Int
 
-  createdBy   String
+  createdBy String
 
-  createdAt   DateTime     @default(now())
-  startedAt   DateTime?
-  finishedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
 
   players     BattlePlayer[]
   questions   BattleQuestionSnapshot[]
   submissions BattleAnswerSubmission[]
+
+  settlement BattleSettlement?
 
   @@index([status])
   @@index([roomId])
@@ -280,23 +304,23 @@ model BattleSession {
 }
 
 model BattlePlayer {
-  id                  String              @id @default(uuid())
+  id String @id @default(uuid())
 
-  battleId            String
-  battle              BattleSession       @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  battleId String
+  battle   BattleSession @relation(fields: [battleId], references: [id], onDelete: Cascade)
 
-  userId              String
-  team                RoomTeam
-  role                BattleRole?
+  userId String
+  team   RoomTeam
+  role   BattleRole?
 
-  score               Int                 @default(0)
-  correctCount        Int                 @default(0)
-  totalResponseTimeMs Int                 @default(0)
+  score               Int @default(0)
+  correctCount        Int @default(0)
+  totalResponseTimeMs Int @default(0)
 
-  result              BattlePlayerResult?
+  result BattlePlayerResult?
 
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([battleId, userId])
   @@index([battleId])
@@ -304,38 +328,38 @@ model BattlePlayer {
 }
 
 model BattleQuestionSnapshot {
-  id                    String              @id @default(uuid())
+  id String @id @default(uuid())
 
-  battleId              String
-  battle                BattleSession       @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  battleId String
+  battle   BattleSession @relation(fields: [battleId], references: [id], onDelete: Cascade)
 
   sourceQuestionId      String
   sourceQuestionVersion Int
 
-  questionIndex         Int
+  questionIndex Int
 
-  skill                 QuestionSkill
-  difficulty            QuestionDifficulty
-  type                  QuestionType
+  skill      QuestionSkill
+  difficulty QuestionDifficulty
+  type       QuestionType
 
-  promptText            String?
-  explanation           String?
+  promptText  String?
+  explanation String?
 
-  mediaJson             Json
-  optionsJson           Json
+  mediaJson   Json
+  optionsJson Json
 
-  correctOptionKey      String?
-  acceptedAnswers       String[]            @default([])
+  correctOptionKey String?
+  acceptedAnswers  String[] @default([])
 
-  maxTimeSec            Int
-  baseScore             Int
-  speedBonus            Int
+  maxTimeSec Int
+  baseScore  Int
+  speedBonus Int
 
-  assignedRole          BattleRole?
+  assignedRole BattleRole?
 
-  createdAt             DateTime            @default(now())
+  createdAt DateTime @default(now())
 
-  submissions           BattleAnswerSubmission[]
+  submissions BattleAnswerSubmission[]
 
   @@unique([battleId, questionIndex, assignedRole])
   @@index([battleId])
@@ -344,27 +368,151 @@ model BattleQuestionSnapshot {
 }
 
 model BattleAnswerSubmission {
-  id                  String                  @id @default(uuid())
+  id String @id @default(uuid())
 
-  battleId            String
-  battle              BattleSession           @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  battleId String
+  battle   BattleSession @relation(fields: [battleId], references: [id], onDelete: Cascade)
 
-  questionSnapshotId  String
-  questionSnapshot    BattleQuestionSnapshot  @relation(fields: [questionSnapshotId], references: [id])
+  questionSnapshotId String
+  questionSnapshot   BattleQuestionSnapshot @relation(fields: [questionSnapshotId], references: [id])
 
-  userId              String
+  userId String
 
-  selectedOptionKey   String?
-  textAnswer          String?
+  selectedOptionKey String?
+  textAnswer        String?
 
-  responseTimeMs      Int
-  status              BattleAnswerStatus
-  isCorrect           Boolean
-  score               Int
+  responseTimeMs Int
+  status         BattleAnswerStatus
+  isCorrect      Boolean
+  score          Int
 
-  submittedAt         DateTime                @default(now())
+  submittedAt DateTime @default(now())
 
   @@unique([questionSnapshotId, userId])
   @@index([battleId])
   @@index([userId])
+}
+
+model PlayerRankProfile {
+  userId String @id
+
+  rankTier RankTier @default(BRONZE)
+  stars    Int      @default(0)
+
+  seasonId String @default("S0")
+
+  winCount  Int @default(0)
+  drawCount Int @default(0)
+  loseCount Int @default(0)
+
+  currentStreak Int @default(0)
+  bestStreak    Int @default(0)
+
+  bestRankTier RankTier @default(BRONZE)
+  bestStars    Int      @default(0)
+
+  totalBattles Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rewardWallet PlayerRewardWallet?
+  rankLogs     RankChangeLog[]
+
+  @@index([rankTier])
+  @@index([seasonId])
+}
+
+model RankChangeLog {
+  id String @id @default(uuid())
+
+  userId String
+  player PlayerRankProfile @relation(fields: [userId], references: [userId])
+
+  battleId String
+
+  oldRankTier RankTier
+  oldStars    Int
+
+  newRankTier RankTier
+  newStars    Int
+
+  result BattlePlayerResult
+
+  starDelta Int
+
+  reason String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([battleId])
+  @@index([createdAt])
+}
+
+model PlayerRewardWallet {
+  userId String @id
+
+  brainPointBalance Int @default(0)
+
+  totalEarned Int @default(0)
+  totalSpent  Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  player PlayerRankProfile @relation(fields: [userId], references: [userId])
+
+  rewardLogs RewardLedger[]
+
+  @@index([brainPointBalance])
+}
+
+model RewardLedger {
+  id String @id @default(uuid())
+
+  userId String
+  wallet PlayerRewardWallet @relation(fields: [userId], references: [userId])
+
+  battleId String?
+
+  sourceType RewardSourceType
+
+  type RewardLedgerType
+
+  amount Int
+
+  balanceAfter Int
+
+  reason String?
+
+  metadataJson Json?
+
+  settlementHash String?
+
+  onChainTxHash String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([battleId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+model BattleSettlement {
+  battleId String @id
+
+  battle BattleSession @relation(fields: [battleId], references: [id])
+
+  processedAt DateTime @default(now())
+
+  rankProcessed   Boolean @default(false)
+  rewardProcessed Boolean @default(false)
+
+  settlementHash String?
+
+  metadataJson Json?
+
+  @@index([processedAt])
 }
