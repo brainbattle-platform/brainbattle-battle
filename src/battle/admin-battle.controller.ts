@@ -23,7 +23,7 @@ import { BattleService } from './battle.service';
 @UseGuards(AuthGuard)
 @Controller('admin/battles')
 export class AdminBattleController {
-  constructor(private readonly battleService: BattleService) {}
+  constructor(private readonly battleService: BattleService) { }
 
   @Get()
   @ApiOperation({
@@ -60,5 +60,16 @@ export class AdminBattleController {
     if (!isAdmin) {
       throw new ForbiddenException('Admin role required');
     }
+  }
+
+  @Get(':battleId/settlement')
+  @ApiOperation({ summary: 'Admin get battle rank/reward settlement' })
+  @ApiParam({ name: 'battleId' })
+  getSettlement(
+    @CurrentUser() user: AuthUser,
+    @Param('battleId') battleId: string,
+  ) {
+    this.assertAdmin(user);
+    return this.battleService.adminGetSettlement(battleId);
   }
 }
