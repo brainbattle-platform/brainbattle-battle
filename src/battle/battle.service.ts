@@ -20,7 +20,9 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { RoomService } from '../room/room.service';
 import {
+  AdminListBattlesDto,
   CreateBattleFromRoomDto,
+  ListMyBattleHistoryDto,
   SubmitAnswerDto,
 } from './dto';
 import { toBattleResponse } from './battle.mapper';
@@ -494,6 +496,232 @@ export class BattleService {
     };
   }
 
+  async getMyHistory(userId: string, query: ListMyBattleHistoryDto) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.BattleSessionWhereInput = {
+      status: query.status,
+      format: query.format,
+      players: {
+        some: {
+          userId,
+          result: query.result,
+        },
+      },
+    };
+
+    const [total, battles] = await this.prisma.$transaction([
+      this.prisma.battleSession.count({ where }),
+      this.prisma.battleSession.findMany({
+        where,
+        include: {
+          players: true,
+          questions: true,
+          submissions: true,
+          room: true,
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    return {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      items: battles.map((battle) => this.toHistoryItem(battle, userId)),
+    };
+  }
+
+  async getBattleSummary(userId: string, battleId: string) {
+    const battle = await this.prisma.battleSession.findUniqueOrThrow({
+      where: { id: battleId },
+      include: {
+        players: true,
+        questions: true,
+        submissions: true,
+        room: true,
+      },
+    });
+
+    this.assertPlayerInBattle(userId, battle.players);
+
+    if (battle.status !== BattleStatus.FINISHED) {
+      throw new BadRequestException('Battle is not finished');
+    }
+
+    const myPlayer = battle.players.find((player) => player.userId === userId)!;
+
+    return {
+      battleId: battle.id,
+      roomId: battle.roomId,
+      format: battle.format,
+      skill: battle.skill,
+      isRanked: battle.isRanked,
+      status: battle.status,
+      startedAt: battle.startedAt,
+      finishedAt: battle.finishedAt,
+
+      myPlayer: {
+        userId: myPlayer.userId,
+        team: myPlayer.team,
+        role: myPlayer.role,
+        score: myPlayer.score,
+        correctCount: myPlayer.correctCount,
+        totalResponseTimeMs: myPlayer.totalResponseTimeMs,
+        result: myPlayer.result,
+      },
+
+      scoreboard: this.buildScoreboard(battle.players),
+
+      teamSummary:
+        battle.format === BattleFormat.TEAM_3V3
+          ? this.buildTeamSummary(battle.players)
+          : null,
+
+      review: battle.questions
+        .sort((a, b) => a.questionIndex - b.questionIndex)
+        .map((question) => {
+          const submissions = battle.submissions.filter(
+            (submission) => submission.questionSnapshotId === question.id,
+          );
+
+          return {
+            questionSnapshotId: question.id,
+            questionIndex: question.questionIndex,
+            assignedRole: question.assignedRole,
+            skill: question.skill,
+            difficulty: question.difficulty,
+            type: question.type,
+            promptText: question.promptText,
+            media: question.mediaJson,
+            options: question.optionsJson,
+
+            correctOptionKey: question.correctOptionKey,
+            acceptedAnswers: question.acceptedAnswers,
+            explanation: question.explanation,
+
+            submissions: submissions.map((submission) => ({
+              userId: submission.userId,
+              selectedOptionKey: submission.selectedOptionKey,
+              textAnswer: submission.textAnswer,
+              responseTimeMs: submission.responseTimeMs,
+              status: submission.status,
+              isCorrect: submission.isCorrect,
+              score: submission.score,
+              submittedAt: submission.submittedAt,
+            })),
+          };
+        }),
+    };
+  }
+
+  async getPublicResult(battleId: string) {
+    const battle = await this.prisma.battleSession.findUniqueOrThrow({
+      where: { id: battleId },
+      include: {
+        players: true,
+        questions: true,
+        submissions: true,
+        room: true,
+      },
+    });
+
+    if (battle.status !== BattleStatus.FINISHED) {
+      throw new BadRequestException('Battle is not finished');
+    }
+
+    return {
+      battleId: battle.id,
+      roomId: battle.roomId,
+      format: battle.format,
+      skill: battle.skill,
+      isRanked: battle.isRanked,
+      status: battle.status,
+      questionCount: battle.questionCount,
+      startedAt: battle.startedAt,
+      finishedAt: battle.finishedAt,
+
+      scoreboard: this.buildScoreboard(battle.players),
+
+      teamSummary:
+        battle.format === BattleFormat.TEAM_3V3
+          ? this.buildTeamSummary(battle.players)
+          : null,
+    };
+  }
+
+  async adminListBattles(query: AdminListBattlesDto) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.BattleSessionWhereInput = {
+      status: query.status,
+      format: query.format,
+      roomId: query.roomId,
+      players: query.userId
+        ? {
+          some: {
+            userId: query.userId,
+          },
+        }
+        : undefined,
+    };
+
+    const [total, battles] = await this.prisma.$transaction([
+      this.prisma.battleSession.count({ where }),
+      this.prisma.battleSession.findMany({
+        where,
+        include: {
+          players: true,
+          questions: true,
+          submissions: true,
+          room: true,
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    return {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      items: battles.map((battle) => ({
+        battleId: battle.id,
+        roomId: battle.roomId,
+        roomCode: battle.room.code,
+        format: battle.format,
+        skill: battle.skill,
+        isRanked: battle.isRanked,
+        status: battle.status,
+        questionCount: battle.questionCount,
+        playerCount: battle.players.length,
+        submissionCount: battle.submissions.length,
+        startedAt: battle.startedAt,
+        finishedAt: battle.finishedAt,
+        createdAt: battle.createdAt,
+        scoreboard: this.buildScoreboard(battle.players),
+        teamSummary:
+          battle.format === BattleFormat.TEAM_3V3
+            ? this.buildTeamSummary(battle.players)
+            : null,
+      })),
+    };
+  }
+
+
   private async getBattleOrThrow(battleId: string) {
     return this.prisma.battleSession.findUniqueOrThrow({
       where: { id: battleId },
@@ -900,5 +1128,119 @@ export class BattleService {
     if (b.totalResponseTimeMs < a.totalResponseTimeMs) return 2;
 
     return 0;
+  }
+
+  private toHistoryItem(
+    battle: {
+      id: string;
+      roomId: string;
+      format: BattleFormat;
+      skill: BattleSkill;
+      isRanked: boolean;
+      status: BattleStatus;
+      questionCount: number;
+      createdAt: Date;
+      startedAt: Date | null;
+      finishedAt: Date | null;
+      players: Array<{
+        userId: string;
+        team: RoomTeam;
+        role: BattleRole | null;
+        score: number;
+        correctCount: number;
+        totalResponseTimeMs: number;
+        result: BattlePlayerResult | null;
+      }>;
+      submissions: Array<{
+        userId: string;
+        isCorrect: boolean;
+        score: number;
+      }>;
+    },
+    userId: string,
+  ) {
+    const me = battle.players.find((player) => player.userId === userId);
+
+    return {
+      battleId: battle.id,
+      roomId: battle.roomId,
+      format: battle.format,
+      skill: battle.skill,
+      isRanked: battle.isRanked,
+      status: battle.status,
+      questionCount: battle.questionCount,
+      createdAt: battle.createdAt,
+      startedAt: battle.startedAt,
+      finishedAt: battle.finishedAt,
+
+      myResult: me?.result ?? null,
+      myScore: me?.score ?? 0,
+      myCorrectCount: me?.correctCount ?? 0,
+      myTeam: me?.team ?? null,
+      myRole: me?.role ?? null,
+
+      scoreboard: this.buildScoreboard(battle.players),
+    };
+  }
+
+  private buildScoreboard(
+    players: Array<{
+      userId: string;
+      team: RoomTeam;
+      role: BattleRole | null;
+      score: number;
+      correctCount: number;
+      totalResponseTimeMs: number;
+      result: BattlePlayerResult | null;
+    }>,
+  ) {
+    return players
+      .map((player) => ({
+        userId: player.userId,
+        team: player.team,
+        role: player.role,
+        score: player.score,
+        correctCount: player.correctCount,
+        totalResponseTimeMs: player.totalResponseTimeMs,
+        result: player.result,
+      }))
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (b.correctCount !== a.correctCount) {
+          return b.correctCount - a.correctCount;
+        }
+        return a.totalResponseTimeMs - b.totalResponseTimeMs;
+      });
+  }
+
+  private buildTeamSummary(
+    players: Array<{
+      team: RoomTeam;
+      score: number;
+      correctCount: number;
+      totalResponseTimeMs: number;
+      result: BattlePlayerResult | null;
+    }>,
+  ) {
+    const build = (team: RoomTeam) => {
+      const teamPlayers = players.filter((player) => player.team === team);
+
+      return {
+        team,
+        score: teamPlayers.reduce((sum, player) => sum + player.score, 0),
+        correctCount: teamPlayers.reduce(
+          (sum, player) => sum + player.correctCount,
+          0,
+        ),
+        totalResponseTimeMs: teamPlayers.reduce(
+          (sum, player) => sum + player.totalResponseTimeMs,
+          0,
+        ),
+        result: teamPlayers[0]?.result ?? null,
+        playerCount: teamPlayers.length,
+      };
+    };
+
+    return [build(RoomTeam.A), build(RoomTeam.B)];
   }
 }
