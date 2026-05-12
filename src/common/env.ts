@@ -9,11 +9,26 @@ export const env = {
 
   USER_PUBLIC_PROFILE_URL: process.env.USER_PUBLIC_PROFILE_URL ?? '',
 
+  AUTH_PROFILE_SYNC_URL: process.env.AUTH_PROFILE_SYNC_URL ?? '',
+  AUTH_WALLET_URL: process.env.AUTH_WALLET_URL ?? '',
+  AUTH_INTERNAL_SERVICE_KEY: process.env.AUTH_INTERNAL_SERVICE_KEY ?? '',
+  AUTH_PROFILE_SYNC_ENABLED: process.env.AUTH_PROFILE_SYNC_ENABLED === 'true',
+
+  DAILY_BP_CAP: Number(process.env.DAILY_BP_CAP ?? 300),
+  REPEAT_OPPONENT_LIMIT_PER_DAY: Number(
+    process.env.REPEAT_OPPONENT_LIMIT_PER_DAY ?? 5,
+  ),
+  REPEAT_OPPONENT_REWARD_MULTIPLIER: Number(
+    process.env.REPEAT_OPPONENT_REWARD_MULTIPLIER ?? 0.2,
+  ),
+
+  BLOCKCHAIN_ENABLED: process.env.BLOCKCHAIN_ENABLED === 'true',
+  RPC_URL: process.env.RPC_URL ?? '',
+  PRIVATE_KEY: process.env.PRIVATE_KEY ?? '',
+  CONTRACT_ADDRESS: process.env.CONTRACT_ADDRESS ?? '',
+  CHAIN_ID: Number(process.env.CHAIN_ID ?? 31337),
+
   REDIS_URL: process.env.REDIS_URL ?? '',
   REDIS_HOST: process.env.REDIS_HOST ?? 'localhost',
   REDIS_PORT: Number(process.env.REDIS_PORT ?? 6379),
-
-  AUTH_PROFILE_SYNC_URL: process.env.AUTH_PROFILE_SYNC_URL ?? '',
-  AUTH_INTERNAL_SERVICE_KEY: process.env.AUTH_INTERNAL_SERVICE_KEY ?? '',
-  AUTH_PROFILE_SYNC_ENABLED: process.env.AUTH_PROFILE_SYNC_ENABLED === 'true',
 };

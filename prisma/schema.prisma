@@ -103,9 +103,12 @@ enum RankTier {
 
 enum RewardLedgerType {
   PARTICIPATION
-  RESULT
+  WIN
+  DRAW
+  LOSE
   PERFORMANCE
   STREAK
+  SEASON
   PENALTY
   ADMIN
 }
@@ -114,6 +117,20 @@ enum RewardSourceType {
   BATTLE
   SEASON
   ADMIN
+}
+
+enum BattleParticipationStatus {
+  NORMAL
+  AFK
+  QUIT
+}
+
+enum OnchainRecordStatus {
+  PENDING
+  SUBMITTED
+  CONFIRMED
+  FAILED
+  BLOCKED
 }
 
 model BattleRoom {
@@ -296,7 +313,8 @@ model BattleSession {
   questions   BattleQuestionSnapshot[]
   submissions BattleAnswerSubmission[]
 
-  settlement BattleSettlement?
+  settlement    BattleSettlement?
+  onchainRecord OnchainRecord?
 
   @@index([status])
   @@index([roomId])
@@ -317,7 +335,8 @@ model BattlePlayer {
   correctCount        Int @default(0)
   totalResponseTimeMs Int @default(0)
 
-  result BattlePlayerResult?
+  result              BattlePlayerResult?
+  participationStatus BattleParticipationStatus @default(NORMAL)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -515,4 +534,31 @@ model BattleSettlement {
   metadataJson Json?
 
   @@index([processedAt])
+}
+
+model OnchainRecord {
+  id String @id @default(uuid())
+
+  battleId String        @unique
+  battle   BattleSession @relation(fields: [battleId], references: [id])
+
+  settlementHash String
+  payloadJson    Json
+
+  txHash      String?
+  blockNumber BigInt?
+
+  chainId         Int
+  contractAddress String
+
+  status OnchainRecordStatus
+
+  errorMessage String?
+
+  createdAt   DateTime  @default(now())
+  submittedAt DateTime?
+  confirmedAt DateTime?
+
+  @@index([status])
+  @@index([createdAt])
 }

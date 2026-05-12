@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Get,
   Param,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -15,9 +16,10 @@ import {
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { BlockchainService } from '../blockchain/blockchain.service';
+import { SettlementPayloadService } from '../reward/settlement-payload.service';
 import { AdminListBattlesDto } from './dto';
 import { BattleService } from './battle.service';
-import { SettlementPayloadService } from '../reward/settlement-payload.service';
 
 @ApiTags('admin/battles')
 @ApiBearerAuth('bearer')
@@ -27,13 +29,11 @@ export class AdminBattleController {
   constructor(
     private readonly battleService: BattleService,
     private readonly settlementPayloadService: SettlementPayloadService,
-  ) { }
+    private readonly blockchainService: BlockchainService,
+  ) {}
 
   @Get()
-  @ApiOperation({
-    summary: 'Admin list battles',
-    description: 'Filter battles by status, format, roomId, or userId.',
-  })
+  @ApiOperation({ summary: 'Admin list battles' })
   listBattles(
     @CurrentUser() user: AuthUser,
     @Query() query: AdminListBattlesDto,
@@ -43,11 +43,7 @@ export class AdminBattleController {
   }
 
   @Get(':battleId')
-  @ApiOperation({
-    summary: 'Admin get battle detail',
-    description:
-      'Debug endpoint. Returns full battle snapshots including correct answers.',
-  })
+  @ApiOperation({ summary: 'Admin get battle detail' })
   @ApiParam({ name: 'battleId' })
   getBattleDetail(
     @CurrentUser() user: AuthUser,
@@ -55,15 +51,6 @@ export class AdminBattleController {
   ) {
     this.assertAdmin(user);
     return this.battleService.adminGetBattleDetail(battleId);
-  }
-
-  private assertAdmin(user: AuthUser) {
-    const roles = user.roles ?? [];
-    const isAdmin = roles.includes('admin') || roles.includes('ADMIN');
-
-    if (!isAdmin) {
-      throw new ForbiddenException('Admin role required');
-    }
   }
 
   @Get(':battleId/settlement')
@@ -78,11 +65,7 @@ export class AdminBattleController {
   }
 
   @Get(':battleId/settlement-payload')
-  @ApiOperation({
-    summary: 'Admin get blockchain-ready settlement payload',
-    description:
-      'Preview off-chain settlement payload/hash before future smart contract sync.',
-  })
+  @ApiOperation({ summary: 'Admin get blockchain-ready settlement payload' })
   @ApiParam({ name: 'battleId' })
   getSettlementPayload(
     @CurrentUser() user: AuthUser,
@@ -90,5 +73,35 @@ export class AdminBattleController {
   ) {
     this.assertAdmin(user);
     return this.settlementPayloadService.buildBattleSettlementPayload(battleId);
+  }
+
+  @Post(':battleId/record-onchain')
+  @ApiOperation({ summary: 'Admin record battle result on-chain' })
+  @ApiParam({ name: 'battleId' })
+  recordOnchain(
+    @CurrentUser() user: AuthUser,
+    @Param('battleId') battleId: string,
+  ) {
+    this.assertAdmin(user);
+    return this.blockchainService.recordBattleOnchain(battleId);
+  }
+
+  @Get(':battleId/onchain-record')
+  @ApiOperation({ summary: 'Admin get on-chain record' })
+  @ApiParam({ name: 'battleId' })
+  getOnchainRecord(
+    @CurrentUser() user: AuthUser,
+    @Param('battleId') battleId: string,
+  ) {
+    this.assertAdmin(user);
+    return this.blockchainService.getOnchainRecord(battleId);
+  }
+
+  private assertAdmin(user: AuthUser) {
+    const roles = user.roles ?? [];
+
+    if (!roles.includes('admin') && !roles.includes('ADMIN')) {
+      throw new ForbiddenException('Admin role required');
+    }
   }
 }
