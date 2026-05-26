@@ -2,9 +2,11 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { env } from './common/env';
+import { env, validateEnv } from './common/env';
 
 async function bootstrap() {
+  validateEnv();
+
   const app = await NestFactory.create(AppModule);
 
   app.enableCors({
@@ -24,7 +26,9 @@ async function bootstrap() {
 
   const config = new DocumentBuilder()
     .setTitle('BrainBattle Battle Service')
-    .setDescription('Battle backend API: auth context, room, matchmaking-ready lobby, battle core later')
+    .setDescription(
+      'Battle backend API: room, question bank, battle core, rank, reward, and blockchain evidence',
+    )
     .setVersion('0.1.0')
     .addBearerAuth(
       {
@@ -45,10 +49,9 @@ async function bootstrap() {
     },
   });
 
-  app.listen(env.PORT, '0.0.0.0')
-
   await app.listen(env.PORT, '0.0.0.0');
-  console.log(`Battle API running at http://localhost:${env.PORT}/api/docs`);
+
+  console.log(`BrainBattle Battle API running at http://localhost:${env.PORT}/api/docs`);
 }
 
 bootstrap();
