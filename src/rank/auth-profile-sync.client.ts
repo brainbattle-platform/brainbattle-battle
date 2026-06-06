@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import { env } from '../common/env';
 
 export interface AuthRankSyncPayload {
@@ -28,21 +28,29 @@ export class AuthProfileSyncClient {
     }
 
     try {
-      await axios.patch(env.AUTH_PROFILE_SYNC_URL, payload, {
+      const { data } = await axios.patch(env.AUTH_PROFILE_SYNC_URL, payload, {
         headers: {
           'x-internal-service-key': env.AUTH_INTERNAL_SERVICE_KEY,
         },
-        timeout: 3000,
+        timeout: env.AUTH_ME_TIMEOUT_MS,
       });
 
-      return { synced: true };
+      return {
+        synced: true,
+        response: data,
+      };
     } catch (error) {
+      const axiosError = error as AxiosError;
+
       this.logger.warn(
-        `Failed to sync rank profile for user ${payload.userId}`,
+        `Failed to sync rank profile for user ${payload.userId}. Status: ${
+          axiosError.response?.status ?? 'NO_STATUS'
+        }`,
       );
 
       return {
         synced: false,
+        status: axiosError.response?.status ?? null,
         error: error instanceof Error ? error.message : 'UNKNOWN_ERROR',
       };
     }

@@ -26,17 +26,36 @@ export class AuthContextClient {
         throw new UnauthorizedException('Invalid auth context response');
       }
 
+      const profile = data.profile ?? null;
+
+      const displayName =
+        profile?.displayName ??
+        profile?.display_name ??
+        profile?.username ??
+        data.email;
+
       return {
         id: data.user_id,
         email: data.email,
-        name: data.profile?.display_name ?? data.profile?.username ?? data.email,
+        name: displayName ?? data.user_id,
         roles: data.roles ?? [],
-        profile: data.profile ?? null,
-        learnerProfile: data.learner_profile ?? null,
+        profile: profile
+          ? {
+              username: profile.username ?? null,
+              displayName:
+                profile.displayName ?? profile.display_name ?? null,
+              avatarUrl: profile.avatarUrl ?? profile.avatar_url ?? null,
+              bio: profile.bio ?? null,
+              status: profile.status ?? null,
+            }
+          : null,
+        learnerProfile: data.learnerProfile ?? data.learner_profile ?? null,
         raw: data,
       };
     } catch (error) {
-      if (error instanceof UnauthorizedException) throw error;
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
 
       const axiosError = error as AxiosError;
 

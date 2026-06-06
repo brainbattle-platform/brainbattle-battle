@@ -4,6 +4,7 @@ import {
   BattleParticipationStatus,
   RewardSourceType,
 } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RewardService } from '../reward/reward.service';
@@ -17,7 +18,7 @@ export class RankRewardService {
     private readonly rankService: RankService,
     private readonly rewardService: RewardService,
     private readonly authProfileSyncClient: AuthProfileSyncClient,
-  ) {}
+  ) { }
 
   async processBattleResult(battleId: string) {
     const existingSettlement = await this.prisma.battleSettlement.findUnique({
@@ -189,7 +190,9 @@ export class RankRewardService {
               balanceAfter: balance,
 
               reason: reward.reason,
-              metadataJson: reward.metadata ?? undefined,
+              metadataJson: reward.metadata
+                ? (reward.metadata as Prisma.InputJsonValue)
+                : undefined,
 
               settlementHash,
             },

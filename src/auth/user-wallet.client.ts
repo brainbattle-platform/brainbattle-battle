@@ -1,5 +1,9 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
-import axios from 'axios';
+import {
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import axios, { AxiosError } from 'axios';
 import { env } from '../common/env';
 
 export interface UserWalletInfo {
@@ -16,16 +20,33 @@ export class UserWalletClient {
       throw new ServiceUnavailableException('AUTH_WALLET_URL is not configured');
     }
 
-    const { data } = await axios.get<UserWalletInfo>(
-      `${env.AUTH_WALLET_URL}/${userId}/wallet`,
-      {
-        headers: {
-          'x-internal-service-key': env.AUTH_INTERNAL_SERVICE_KEY,
+    try {
+      const { data } = await axios.get<UserWalletInfo>(
+        `${env.AUTH_WALLET_URL}/${userId}/wallet`,
+        {
+          headers: {
+            'x-internal-service-key': env.AUTH_INTERNAL_SERVICE_KEY,
+          },
+          timeout: env.AUTH_ME_TIMEOUT_MS,
         },
-        timeout: env.AUTH_ME_TIMEOUT_MS,
-      },
-    );
+      );
 
-    return data;
+      return {
+        userId: data.userId,
+        walletAddress: data.walletAddress ?? null,
+        walletVerifiedAt: data.walletVerifiedAt ?? null,
+        walletProvider: data.walletProvider ?? null,
+      };
+    } catch (error) {
+      const axiosError = error as AxiosError;
+
+      if (axiosError.response?.status === 404) {
+        throw new NotFoundException(`Wallet not found for user ${userId}`);
+      }
+
+      throw new ServiceUnavailableException(
+        'Auth wallet endpoint is unavailable',
+      );
+    }
   }
 }

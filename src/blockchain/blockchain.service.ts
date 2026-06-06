@@ -3,7 +3,7 @@ import {
   Injectable,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { OnchainRecordStatus } from '@prisma/client';
+import { OnchainRecordStatus, Prisma } from '@prisma/client';
 import { ethers } from 'ethers';
 import { env } from '../common/env';
 import { PrismaService } from '../prisma/prisma.service';
@@ -29,21 +29,29 @@ export class BlockchainService {
     const { payload, payloadHash } =
       await this.settlementPayloadService.buildBattleSettlementPayload(battleId);
 
+    const settlementHash = payload.settlementHash ?? payloadHash;
+
+    if (!settlementHash) {
+      throw new BadRequestException('Missing settlement hash');
+    }
+
+    const payloadJson = payload as Prisma.InputJsonValue;
+
     if (!env.BLOCKCHAIN_ENABLED) {
       return this.prisma.onchainRecord.upsert({
         where: { battleId },
         create: {
           battleId,
-          settlementHash: payload.settlementHash,
-          payloadJson: payload,
+          settlementHash,
+          payloadJson,
           chainId: env.CHAIN_ID,
           contractAddress: env.CONTRACT_ADDRESS || 'DISABLED',
           status: OnchainRecordStatus.BLOCKED,
           errorMessage: 'BLOCKCHAIN_DISABLED',
         },
         update: {
-          settlementHash: payload.settlementHash,
-          payloadJson: payload,
+          settlementHash,
+          payloadJson,
           status: OnchainRecordStatus.BLOCKED,
           errorMessage: 'BLOCKCHAIN_DISABLED',
         },
@@ -83,15 +91,15 @@ export class BlockchainService {
       where: { battleId },
       create: {
         battleId,
-        settlementHash: payload.settlementHash,
-        payloadJson: payload,
+        settlementHash,
+        payloadJson,
         chainId: env.CHAIN_ID,
         contractAddress: env.CONTRACT_ADDRESS,
         status: OnchainRecordStatus.PENDING,
       },
       update: {
-        settlementHash: payload.settlementHash,
-        payloadJson: payload,
+        settlementHash,
+        payloadJson,
         status: OnchainRecordStatus.PENDING,
         errorMessage: null,
       },

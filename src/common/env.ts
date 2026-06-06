@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 function readString(name: string, fallback = ''): string {
   return process.env[name]?.trim() || fallback;
 }
@@ -53,7 +55,7 @@ export const env = {
 
   AUTH_PROFILE_SYNC_URL: readString(
     'AUTH_PROFILE_SYNC_URL',
-    'http://localhost:3000/internal/profile-sync',
+    'http://localhost:3000/internal/learner-profiles/rank-sync',
   ),
 
   AUTH_WALLET_URL: readString(
