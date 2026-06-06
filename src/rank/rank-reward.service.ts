@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { BattlePlayerResult, RewardSourceType } from '@prisma/client';
+import {
+  BattlePlayerResult,
+  BattleParticipationStatus,
+  RewardSourceType,
+} from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RewardService } from '../reward/reward.service';
@@ -13,7 +18,7 @@ export class RankRewardService {
     private readonly rankService: RankService,
     private readonly rewardService: RewardService,
     private readonly authProfileSyncClient: AuthProfileSyncClient,
-  ) {}
+  ) { }
 
   async processBattleResult(battleId: string) {
     const existingSettlement = await this.prisma.battleSettlement.findUnique({
@@ -43,6 +48,35 @@ export class RankRewardService {
         if (!player.result) {
           continue;
         }
+
+        const assignedQuestions = battle.questions.filter((question) => {
+          if (battle.format === 'DUEL_1V1') {
+            return true;
+          }
+
+          return question.assignedRole === player.role;
+        }).length;
+
+        const answeredQuestions = battle.submissions.filter(
+          (submission) => submission.userId === player.userId,
+        ).length;
+
+        const participationStatus =
+          answeredQuestions === 0
+            ? BattleParticipationStatus.AFK
+            : BattleParticipationStatus.NORMAL;
+
+        await tx.battlePlayer.update({
+          where: {
+            battleId_userId: {
+              battleId: battle.id,
+              userId: player.userId,
+            },
+          },
+          data: {
+            participationStatus,
+          },
+        });
 
         const profile = await this.rankService.getOrCreateProfile(
           tx,
@@ -118,24 +152,19 @@ export class RankRewardService {
           },
         });
 
-        const assignedQuestions = battle.questions.filter((question) => {
-          if (battle.format === 'DUEL_1V1') {
-            return true;
-          }
+        const opponentUserIds = battle.players
+          .filter((item) => item.team !== player.team)
+          .map((item) => item.userId);
 
-          return question.assignedRole === player.role;
-        }).length;
-
-        const answeredQuestions = battle.submissions.filter(
-          (submission) => submission.userId === player.userId,
-        ).length;
-
-        const rewards = this.rewardService.calculateRewards({
+        const rewards = await this.rewardService.calculateRewards({
+          userId: player.userId,
+          battleId: battle.id,
           format: battle.format,
           result: player.result,
           score: player.score,
           answeredQuestions,
           assignedQuestions,
+          opponentUserIds,
         });
 
         const wallet = await tx.playerRewardWallet.findUniqueOrThrow({
@@ -161,6 +190,9 @@ export class RankRewardService {
               balanceAfter: balance,
 
               reason: reward.reason,
+              metadataJson: reward.metadata
+                ? (reward.metadata as Prisma.InputJsonValue)
+                : undefined,
 
               settlementHash,
             },

@@ -3,13 +3,17 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  schemas   = ["battle"]
 }
 
 enum BattleFormat {
   DUEL_1V1
   TEAM_3V3
+
+  @@schema("battle")
 }
 
 enum BattleSkill {
@@ -17,17 +21,23 @@ enum BattleSkill {
   LISTENING
   VOCABULARY
   MIXED
+
+  @@schema("battle")
 }
 
 enum BattleRole {
   GRAMMAR
   LISTENING
   VOCABULARY
+
+  @@schema("battle")
 }
 
 enum RoomTeam {
   A
   B
+
+  @@schema("battle")
 }
 
 enum BattleRoomStatus {
@@ -37,11 +47,15 @@ enum BattleRoomStatus {
   FINISHED
   CANCELLED
   EXPIRED
+
+  @@schema("battle")
 }
 
 enum QuestionSource {
   ADMIN_CREATED
   IMPORTED_FROM_LEARNING
+
+  @@schema("battle")
 }
 
 enum QuestionStatus {
@@ -50,29 +64,39 @@ enum QuestionStatus {
   APPROVED
   REJECTED
   ARCHIVED
+
+  @@schema("battle")
 }
 
 enum QuestionSkill {
   GRAMMAR
   LISTENING
   VOCABULARY
+
+  @@schema("battle")
 }
 
 enum QuestionDifficulty {
   EASY
   MEDIUM
   HARD
+
+  @@schema("battle")
 }
 
 enum QuestionType {
   MULTIPLE_CHOICE
   FILL_BLANK
+
+  @@schema("battle")
 }
 
 enum QuestionMediaType {
   IMAGE
   AUDIO
   VIDEO
+
+  @@schema("battle")
 }
 
 enum BattleStatus {
@@ -80,18 +104,24 @@ enum BattleStatus {
   RUNNING
   FINISHED
   CANCELLED
+
+  @@schema("battle")
 }
 
 enum BattlePlayerResult {
   WIN
   LOSE
   DRAW
+
+  @@schema("battle")
 }
 
 enum BattleAnswerStatus {
   CORRECT
   WRONG
   TIMEOUT
+
+  @@schema("battle")
 }
 
 enum RankTier {
@@ -99,21 +129,48 @@ enum RankTier {
   SILVER
   GOLD
   CHALLENGER
+
+  @@schema("battle")
 }
 
 enum RewardLedgerType {
   PARTICIPATION
-  RESULT
+  WIN
+  DRAW
+  LOSE
   PERFORMANCE
   STREAK
+  SEASON
   PENALTY
   ADMIN
+
+  @@schema("battle")
 }
 
 enum RewardSourceType {
   BATTLE
   SEASON
   ADMIN
+
+  @@schema("battle")
+}
+
+enum BattleParticipationStatus {
+  NORMAL
+  AFK
+  QUIT
+
+  @@schema("battle")
+}
+
+enum OnchainRecordStatus {
+  PENDING
+  SUBMITTED
+  CONFIRMED
+  FAILED
+  BLOCKED
+
+  @@schema("battle")
 }
 
 model BattleRoom {
@@ -142,6 +199,7 @@ model BattleRoom {
   @@index([code])
   @@index([hostUserId])
   @@index([createdAt])
+  @@schema("battle")
 }
 
 model RoomMember {
@@ -163,6 +221,7 @@ model RoomMember {
   @@unique([roomId, team, role])
   @@index([userId])
   @@index([roomId, leftAt])
+  @@schema("battle")
 }
 
 model BattleQuestion {
@@ -218,6 +277,7 @@ model BattleQuestion {
   @@index([source])
   @@index([externalSource, externalQuestionId])
   @@index([createdAt])
+  @@schema("battle")
 }
 
 model BattleQuestionOption {
@@ -235,6 +295,7 @@ model BattleQuestionOption {
 
   @@unique([questionId, key])
   @@index([questionId])
+  @@schema("battle")
 }
 
 model BattleQuestionMedia {
@@ -253,6 +314,7 @@ model BattleQuestionMedia {
 
   @@index([questionId])
   @@index([type])
+  @@schema("battle")
 }
 
 model QuestionReviewLog {
@@ -270,6 +332,7 @@ model QuestionReviewLog {
   @@index([questionId])
   @@index([actorUserId])
   @@index([createdAt])
+  @@schema("battle")
 }
 
 model BattleSession {
@@ -296,11 +359,13 @@ model BattleSession {
   questions   BattleQuestionSnapshot[]
   submissions BattleAnswerSubmission[]
 
-  settlement BattleSettlement?
+  settlement    BattleSettlement?
+  onchainRecord OnchainRecord?
 
   @@index([status])
   @@index([roomId])
   @@index([createdAt])
+  @@schema("battle")
 }
 
 model BattlePlayer {
@@ -317,7 +382,8 @@ model BattlePlayer {
   correctCount        Int @default(0)
   totalResponseTimeMs Int @default(0)
 
-  result BattlePlayerResult?
+  result              BattlePlayerResult?
+  participationStatus BattleParticipationStatus @default(NORMAL)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -325,6 +391,7 @@ model BattlePlayer {
   @@unique([battleId, userId])
   @@index([battleId])
   @@index([userId])
+  @@schema("battle")
 }
 
 model BattleQuestionSnapshot {
@@ -365,6 +432,7 @@ model BattleQuestionSnapshot {
   @@index([battleId])
   @@index([sourceQuestionId])
   @@index([assignedRole])
+  @@schema("battle")
 }
 
 model BattleAnswerSubmission {
@@ -391,6 +459,7 @@ model BattleAnswerSubmission {
   @@unique([questionSnapshotId, userId])
   @@index([battleId])
   @@index([userId])
+  @@schema("battle")
 }
 
 model PlayerRankProfile {
@@ -421,6 +490,7 @@ model PlayerRankProfile {
 
   @@index([rankTier])
   @@index([seasonId])
+  @@schema("battle")
 }
 
 model RankChangeLog {
@@ -448,6 +518,7 @@ model RankChangeLog {
   @@index([userId])
   @@index([battleId])
   @@index([createdAt])
+  @@schema("battle")
 }
 
 model PlayerRewardWallet {
@@ -466,6 +537,7 @@ model PlayerRewardWallet {
   rewardLogs RewardLedger[]
 
   @@index([brainPointBalance])
+  @@schema("battle")
 }
 
 model RewardLedger {
@@ -498,6 +570,7 @@ model RewardLedger {
   @@index([battleId])
   @@index([type])
   @@index([createdAt])
+  @@schema("battle")
 }
 
 model BattleSettlement {
@@ -515,4 +588,33 @@ model BattleSettlement {
   metadataJson Json?
 
   @@index([processedAt])
+  @@schema("battle")
+}
+
+model OnchainRecord {
+  id String @id @default(uuid())
+
+  battleId String        @unique
+  battle   BattleSession @relation(fields: [battleId], references: [id])
+
+  settlementHash String
+  payloadJson    Json
+
+  txHash      String?
+  blockNumber BigInt?
+
+  chainId         Int
+  contractAddress String
+
+  status OnchainRecordStatus
+
+  errorMessage String?
+
+  createdAt   DateTime  @default(now())
+  submittedAt DateTime?
+  confirmedAt DateTime?
+
+  @@index([status])
+  @@index([createdAt])
+  @@schema("battle")
 }
