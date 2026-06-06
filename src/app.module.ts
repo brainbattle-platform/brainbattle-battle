@@ -3,6 +3,7 @@ import { AuthModule } from './auth/auth.module';
 import { BattleModule } from './battle/battle.module';
 import { BlockchainModule } from './blockchain/blockchain.module';
 import { HealthModule } from './health/health.module';
+import { MatchmakingModule } from './matchmaking/matchmaking.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { QuestionModule } from './question/question.module';
 import { RankModule } from './rank/rank.module';
@@ -17,6 +18,7 @@ import { RoomModule } from './room/room.module';
     AuthModule,
     HealthModule,
     RoomModule,
+    MatchmakingModule,
     QuestionModule,
     RewardModule,
     RankModule,

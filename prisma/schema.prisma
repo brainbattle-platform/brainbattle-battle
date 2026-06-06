@@ -51,6 +51,15 @@ enum BattleRoomStatus {
   @@schema("battle")
 }
 
+enum MatchmakingQueueStatus {
+  WAITING
+  MATCHED
+  CANCELLED
+  EXPIRED
+
+  @@schema("battle")
+}
+
 enum QuestionSource {
   ADMIN_CREATED
   IMPORTED_FROM_LEARNING
@@ -221,6 +230,38 @@ model RoomMember {
   @@unique([roomId, team, role])
   @@index([userId])
   @@index([roomId, leftAt])
+  @@schema("battle")
+}
+
+model MatchmakingQueueEntry {
+  id String @id @default(uuid())
+
+  userId String
+
+  format BattleFormat
+  skill  BattleSkill
+  role   BattleRole?
+
+  rankTier         String?
+  rankStars        Int?
+  matchmakingScore Int?
+
+  status MatchmakingQueueStatus @default(WAITING)
+
+  roomId            String?
+  matchedWithUserId String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  expiresAt   DateTime
+  matchedAt   DateTime?
+  cancelledAt DateTime?
+
+  @@index([userId])
+  @@index([status])
+  @@index([format, skill, status])
+  @@index([matchmakingScore])
+  @@index([createdAt])
   @@schema("battle")
 }
 
