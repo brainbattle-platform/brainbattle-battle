@@ -91,6 +91,17 @@ export const env = {
   REDIS_URL: readString('REDIS_URL'),
   REDIS_HOST: readString('REDIS_HOST', 'localhost'),
   REDIS_PORT: readNumber('REDIS_PORT', 6379),
+
+  MATCHMAKING_QUEUE_EXPIRE_SECONDS: readNumber(
+    'MATCHMAKING_QUEUE_EXPIRE_SECONDS',
+    120,
+  ),
+
+  DUEL_MATCH_SCORE_DELTA: readNumber('DUEL_MATCH_SCORE_DELTA', 2),
+
+  TEAM_MATCH_AVG_SCORE_DELTA: readNumber('TEAM_MATCH_AVG_SCORE_DELTA', 3),
+
+  SOCKET_CORS_ORIGIN: readString('SOCKET_CORS_ORIGIN', '*'),
 };
 
 export function validateEnv() {
