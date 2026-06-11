@@ -20,6 +20,7 @@ import { BattleService } from './battle.service';
 import {
   CreateBattleFromRoomDto,
   ListMyBattleHistoryDto,
+  StartBattleFromRoomDto,
   SubmitAnswerDto,
 } from './dto';
 
@@ -28,7 +29,7 @@ import {
 @UseGuards(AuthGuard)
 @Controller('battles')
 export class BattleController {
-  constructor(private readonly battleService: BattleService) {}
+  constructor(private readonly battleService: BattleService) { }
 
   @Get('me/history')
   @ApiOperation({ summary: 'Get current player battle history' })
@@ -52,6 +53,21 @@ export class BattleController {
     @Body() dto: CreateBattleFromRoomDto,
   ) {
     return this.battleService.createFromRoom(user.id, roomId, dto);
+  }
+
+  @Post('from-room/:roomId/start')
+  @ApiOperation({
+    summary: 'Create and start battle from READY room',
+    description:
+      'Host only. Creates battle session from a READY room and starts it immediately by default.',
+  })
+  @ApiParam({ name: 'roomId' })
+  startFromRoom(
+    @CurrentUser() user: AuthUser,
+    @Param('roomId') roomId: string,
+    @Body() dto: StartBattleFromRoomDto,
+  ) {
+    return this.battleService.startFromRoom(user.id, roomId, dto);
   }
 
   @Get(':battleId')

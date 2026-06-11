@@ -23,10 +23,12 @@ import {
   AdminListBattlesDto,
   CreateBattleFromRoomDto,
   ListMyBattleHistoryDto,
+  StartBattleFromRoomDto,
   SubmitAnswerDto,
 } from './dto';
 import { toBattleResponse } from './battle.mapper';
 import { RankRewardService } from '../rank/rank-reward.service';
+import { BattleEventsService } from './battle-events.service';
 
 @Injectable()
 export class BattleService {
@@ -34,6 +36,7 @@ export class BattleService {
     private readonly prisma: PrismaService,
     private readonly roomService: RoomService,
     private readonly rankRewardService: RankRewardService,
+    private readonly events: BattleEventsService,
   ) { }
 
   async createFromRoom(userId: string, roomId: string, dto: CreateBattleFromRoomDto) {
@@ -146,7 +149,50 @@ export class BattleService {
       });
     });
 
-    return toBattleResponse(battle);
+    const response = toBattleResponse(battle);
+
+    this.events.emitToRoom(room.id, 'battle.created', {
+      roomId: room.id,
+      battle: response,
+    });
+
+    return response;
+  }
+
+  async startFromRoom(
+    userId: string,
+    roomId: string,
+    dto: StartBattleFromRoomDto,
+  ) {
+    const createdBattle = await this.createFromRoom(userId, roomId, {
+      questionCount: dto.questionCount,
+    });
+
+    const battle =
+      dto.autoStart === false
+        ? createdBattle
+        : await this.startBattle(userId, createdBattle.id);
+
+    const fullBattle = await this.getBattleOrThrow(battle.id);
+    const response = toBattleResponse(fullBattle);
+
+    this.events.emitToRoom(roomId, 'battle.created', {
+      roomId,
+      battle: response,
+    });
+
+    if (dto.autoStart !== false) {
+      this.events.emitToRoom(roomId, 'battle.started', {
+        roomId,
+        battle: response,
+      });
+
+      this.events.emitToBattle(battle.id, 'battle.started', {
+        battle: response,
+      });
+    }
+
+    return response;
   }
 
   async getBattle(battleId: string) {
@@ -178,7 +224,18 @@ export class BattleService {
       },
     });
 
-    return toBattleResponse(updated);
+    const response = toBattleResponse(updated);
+
+    this.events.emitToRoom(updated.roomId, 'battle.started', {
+      roomId: updated.roomId,
+      battle: response,
+    });
+
+    this.events.emitToBattle(updated.id, 'battle.started', {
+      battle: response,
+    });
+
+    return response;
   }
 
   async getPublicQuestions(userId: string, battleId: string) {
