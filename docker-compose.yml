@@ -1,18 +1,7 @@
 services:
-  battle-redis:
+  redis:
     image: redis:7-alpine
-    container_name: brainbattle-battle-redis
-    restart: unless-stopped
+    container_name: brainbattle-redis
     ports:
       - "6379:6379"
-    command: redis-server --appendonly yes
-    volumes:
-      - battle_redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-volumes:
-  battle_redis_data:
+    command: ["redis-server", "--appendonly", "yes"]

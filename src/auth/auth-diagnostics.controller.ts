@@ -28,6 +28,9 @@ export class AuthDiagnosticsController {
       roles: user.roles ?? [],
       profile: user.profile ?? null,
       learnerProfile: user.learnerProfile ?? null,
+      wallets: (user.raw as any)?.wallets ?? [],
+      wallet: ((user.raw as any)?.wallets ?? []).find((wallet: any) => wallet?.is_primary || wallet?.isPrimary) ?? null,
+      walletAddress: (((user.raw as any)?.wallets ?? []).find((wallet: any) => wallet?.is_primary || wallet?.isPrimary)?.wallet_address) ?? null,
     };
   }
 

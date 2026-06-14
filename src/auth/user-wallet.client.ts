@@ -11,6 +11,29 @@ export interface UserWalletInfo {
   walletAddress: string | null;
   walletVerifiedAt?: string | null;
   walletProvider?: string | null;
+  chain?: string | null;
+  isPrimary?: boolean;
+}
+
+function normalizeWalletResponse(userId: string, data: any): UserWalletInfo {
+  const primary = data?.primaryWallet ?? data?.wallet ?? null;
+  const walletAddress =
+    data?.walletAddress ??
+    data?.address ??
+    primary?.walletAddress ??
+    primary?.address ??
+    null;
+
+  return {
+    userId: data?.userId ?? userId,
+    walletAddress,
+    walletVerifiedAt:
+      data?.walletVerifiedAt ?? data?.verifiedAt ?? primary?.verifiedAt ?? null,
+    walletProvider:
+      data?.walletProvider ?? data?.chain ?? primary?.chain ?? null,
+    chain: data?.chain ?? primary?.chain ?? data?.walletProvider ?? null,
+    isPrimary: data?.isPrimary ?? primary?.isPrimary ?? Boolean(walletAddress),
+  };
 }
 
 @Injectable()
@@ -31,12 +54,7 @@ export class UserWalletClient {
         },
       );
 
-      return {
-        userId: data.userId,
-        walletAddress: data.walletAddress ?? null,
-        walletVerifiedAt: data.walletVerifiedAt ?? null,
-        walletProvider: data.walletProvider ?? null,
-      };
+      return normalizeWalletResponse(userId, data);
     } catch (error) {
       const axiosError = error as AxiosError;
 

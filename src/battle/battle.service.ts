@@ -19,6 +19,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoomService } from '../room/room.service';
+import { RoomEventsService } from '../room/room-events.service';
 import {
   AdminListBattlesDto,
   CreateBattleFromRoomDto,
@@ -39,6 +40,7 @@ export class BattleService {
     private readonly rankRewardService: RankRewardService,
     private readonly blockchainService: BlockchainService,
     private readonly events: BattleEventsService,
+    private readonly roomEvents: RoomEventsService,
   ) { }
 
   async createFromRoom(userId: string, roomId: string, dto: CreateBattleFromRoomDto) {
@@ -153,7 +155,7 @@ export class BattleService {
 
     const response = toBattleResponse(battle);
 
-    this.events.emitToRoom(room.id, 'battle.created', {
+    this.emitRoomBattleEvent(room.id, 'battle.created', {
       roomId: room.id,
       battle: response,
     });
@@ -178,13 +180,13 @@ export class BattleService {
     const fullBattle = await this.getBattleOrThrow(battle.id);
     const response = toBattleResponse(fullBattle);
 
-    this.events.emitToRoom(roomId, 'battle.created', {
+    this.emitRoomBattleEvent(roomId, 'battle.created', {
       roomId,
       battle: response,
     });
 
     if (dto.autoStart !== false) {
-      this.events.emitToRoom(roomId, 'battle.started', {
+      this.emitRoomBattleEvent(roomId, 'battle.started', {
         roomId,
         battle: response,
       });
@@ -246,7 +248,7 @@ export class BattleService {
 
     const response = toBattleResponse(updated);
 
-    this.events.emitToRoom(updated.roomId, 'battle.started', {
+    this.emitRoomBattleEvent(updated.roomId, 'battle.started', {
       roomId: updated.roomId,
       battle: response,
     });
@@ -585,7 +587,7 @@ export class BattleService {
       battle: response,
     });
 
-    this.events.emitToRoom(settledBattle.roomId, 'battle.finished', {
+    this.emitRoomBattleEvent(settledBattle.roomId, 'battle.finished', {
       battle: response,
     });
 
@@ -762,29 +764,29 @@ export class BattleService {
       },
     };
 
-    const [total, battles] = await this.prisma.$transaction([
-      this.prisma.battleSession.count({ where }),
-      this.prisma.battleSession.findMany({
-        where,
-        include: {
-          players: true,
-          questions: true,
-          submissions: true,
-          room: true,
-        },
-        orderBy: {
-          createdAt: 'desc',
-        },
-        skip,
-        take: limit,
-      }),
-    ]);
+    // Mobile only needs recent items for the dashboard. Avoid a count+find
+    // transaction here; it opens extra pooled connections and is unnecessary
+    // during live demo refreshes.
+    const battles = await this.prisma.battleSession.findMany({
+      where,
+      include: {
+        players: true,
+        questions: true,
+        submissions: true,
+        room: true,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      skip,
+      take: limit,
+    });
 
     return {
       page,
       limit,
-      total,
-      totalPages: Math.ceil(total / limit),
+      total: battles.length,
+      totalPages: battles.length < limit ? page : page + 1,
       items: battles.map((battle) => this.toHistoryItem(battle, userId)),
     };
   }
@@ -975,6 +977,16 @@ export class BattleService {
     return this.prisma.battleSettlement.findUnique({
       where: { battleId },
     });
+  }
+
+
+  private emitRoomBattleEvent(roomId: string, event: string, payload: unknown) {
+    // Room lobby clients are connected to the /rooms namespace, while battle
+    // runtime clients are connected to /battles. Publish room-level battle
+    // events to both namespaces so the non-host player can leave lobby and
+    // enter the live battle even if they have not connected to /battles yet.
+    this.events.emitToRoom(roomId, event, payload);
+    this.roomEvents.emitToRoom(roomId, event, payload);
   }
 
   private async getBattleOrThrow(battleId: string) {
@@ -1540,10 +1552,10 @@ export class BattleService {
           continue;
         }
 
-        const startedAt = this.calculateQuestionStartedAt(
-          battle.startedAt,
-          question.questionIndex,
-          question.maxTimeSec,
+        const startedAt = this.calculateQuestionStartedAtForPlayer(
+          battle,
+          player,
+          question,
         );
         const endsAt = new Date(startedAt.getTime() + question.maxTimeSec * 1000);
 
@@ -1666,10 +1678,10 @@ export class BattleService {
       };
     }
 
-    const serverStartedAt = this.calculateQuestionStartedAt(
-      battle.startedAt,
-      currentQuestion.questionIndex,
-      currentQuestion.maxTimeSec,
+    const serverStartedAt = this.calculateQuestionStartedAtForPlayer(
+      battle,
+      player,
+      currentQuestion,
     );
 
     const serverEndsAt = new Date(
@@ -1677,6 +1689,23 @@ export class BattleService {
     );
 
     const now = new Date();
+
+    if (now.getTime() < serverStartedAt.getTime()) {
+      return {
+        battleId: battle.id,
+        status: battle.status,
+        player: {
+          userId: player.userId,
+          team: player.team,
+          role: player.role,
+        },
+        currentQuestion: null,
+        remainingQuestions: playerQuestions.length - answeredQuestionIds.size,
+        message: 'Next question has not started yet',
+        nextQuestionStartsAt: serverStartedAt.toISOString(),
+        nextQuestionRemainingMs: Math.max(0, serverStartedAt.getTime() - now.getTime()),
+      };
+    }
 
     return {
       battleId: battle.id,
@@ -1705,6 +1734,31 @@ export class BattleService {
       },
       remainingQuestions: playerQuestions.length - answeredQuestionIds.size,
     };
+  }
+
+  private calculateQuestionStartedAtForPlayer(
+    battle: Awaited<ReturnType<BattleService['getBattleOrThrow']>>,
+    player: { role: BattleRole | null },
+    question: { questionIndex: number; maxTimeSec: number; assignedRole: BattleRole | null },
+  ) {
+    const startedAt = battle.startedAt ?? new Date();
+
+    const previousQuestions = battle.questions
+      .filter((item) => {
+        if (battle.format === BattleFormat.DUEL_1V1) {
+          return item.assignedRole === null && item.questionIndex < question.questionIndex;
+        }
+
+        return item.assignedRole === player.role && item.questionIndex < question.questionIndex;
+      })
+      .sort((a, b) => a.questionIndex - b.questionIndex);
+
+    const previousDurationMs = previousQuestions.reduce(
+      (sum, item) => sum + item.maxTimeSec * 1000,
+      0,
+    );
+
+    return new Date(startedAt.getTime() + previousDurationMs);
   }
 
   private calculateQuestionStartedAt(
