@@ -20,6 +20,7 @@ import { BattleService } from './battle.service';
 import {
   CreateBattleFromRoomDto,
   ListMyBattleHistoryDto,
+  StartBattleFromRoomDto,
   SubmitAnswerDto,
 } from './dto';
 
@@ -28,7 +29,19 @@ import {
 @UseGuards(AuthGuard)
 @Controller('battles')
 export class BattleController {
-  constructor(private readonly battleService: BattleService) {}
+  constructor(private readonly battleService: BattleService) { }
+
+
+
+  @Get('me/active')
+  @ApiOperation({
+    summary: 'Get current player active battle',
+    description:
+      'Returns CREATED/RUNNING battle for current player if there is one. Used by mobile to resume real gameplay state.',
+  })
+  getMyActiveBattle(@CurrentUser() user: AuthUser) {
+    return this.battleService.getMyActiveBattle(user.id);
+  }
 
   @Get('me/history')
   @ApiOperation({ summary: 'Get current player battle history' })
@@ -52,6 +65,21 @@ export class BattleController {
     @Body() dto: CreateBattleFromRoomDto,
   ) {
     return this.battleService.createFromRoom(user.id, roomId, dto);
+  }
+
+  @Post('from-room/:roomId/start')
+  @ApiOperation({
+    summary: 'Create and start battle from READY room',
+    description:
+      'Host only. Creates battle session from a READY room and starts it immediately by default.',
+  })
+  @ApiParam({ name: 'roomId' })
+  startFromRoom(
+    @CurrentUser() user: AuthUser,
+    @Param('roomId') roomId: string,
+    @Body() dto: StartBattleFromRoomDto,
+  ) {
+    return this.battleService.startFromRoom(user.id, roomId, dto);
   }
 
   @Get(':battleId')
@@ -115,6 +143,20 @@ export class BattleController {
     @Param('battleId') battleId: string,
   ) {
     return this.battleService.getPublicQuestions(user.id, battleId);
+  }
+
+  @Get(':battleId/current-question')
+  @ApiOperation({
+    summary: 'Get current active question for current player',
+    description:
+      'Server-authoritative question endpoint. Returns one active question with server timer.',
+  })
+  @ApiParam({ name: 'battleId' })
+  getCurrentQuestion(
+    @CurrentUser() user: AuthUser,
+    @Param('battleId') battleId: string,
+  ) {
+    return this.battleService.getCurrentQuestion(user.id, battleId);
   }
 
   @Post(':battleId/answers')

@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+  <body>
+    <h2>BrainBattle Socket.IO Test</h2>
+
+    <textarea id="token" rows="5" cols="100" placeholder="Paste token"></textarea>
+    <br />
+
+    <button onclick="connect()">Connect</button>
+    <button onclick="status()">Status</button>
+    <button onclick="join1v1()">Join 1v1</button>
+    <button onclick="leave()">Leave</button>
+
+    <pre id="log"></pre>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+      let socket;
+
+      function log(event, data) {
+        document.getElementById("log").textContent +=
+          `\n[${event}] ${JSON.stringify(data, null, 2)}\n`;
+      }
+
+      function connect() {
+        const token = document.getElementById("token").value.trim();
+
+        socket = io("http://localhost:3001/matchmaking", {
+          transports: ["websocket"],
+          auth: { token },
+        });
+
+        socket.on("connect", () => log("connect", { id: socket.id }));
+        socket.on("connect_error", (err) => log("connect_error", err.message));
+
+        socket.on("queue.status", (data) => log("queue.status", data));
+        socket.on("queue.joined", (data) => log("queue.joined", data));
+        socket.on("queue.waiting", (data) => log("queue.waiting", data));
+        socket.on("queue.left", (data) => log("queue.left", data));
+        socket.on("match.found", (data) => log("match.found", data));
+      }
+
+      function status() {
+        socket.emit("matchmaking.status");
+      }
+
+      function join1v1() {
+        socket.emit("matchmaking.join", {
+          format: "DUEL_1V1",
+          skill: "GRAMMAR",
+          isRanked: true
+        });
+      }
+
+      function leave() {
+        socket.emit("matchmaking.leave");
+      }
+    </script>
+  </body>
+</html>

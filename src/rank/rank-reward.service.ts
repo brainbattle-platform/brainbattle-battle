@@ -8,6 +8,7 @@ import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RewardService } from '../reward/reward.service';
+import { ShopService } from '../shop/shop.service';
 import { AuthProfileSyncClient } from './auth-profile-sync.client';
 import { RankService } from './rank.service';
 
@@ -17,6 +18,7 @@ export class RankRewardService {
     private readonly prisma: PrismaService,
     private readonly rankService: RankService,
     private readonly rewardService: RewardService,
+    private readonly shopService: ShopService,
     private readonly authProfileSyncClient: AuthProfileSyncClient,
   ) { }
 
@@ -28,6 +30,60 @@ export class RankRewardService {
     if (existingSettlement) {
       await this.syncProfilesAfterSettlement(battleId);
       return existingSettlement;
+    }
+
+    // Reward calculation reads historical ledgers/battles for daily cap and
+    // anti-farm rules. Do those reads before opening the settlement transaction;
+    // otherwise Prisma may need a second connection while an interactive
+    // transaction is held, which is risky on Supabase/pooled PostgreSQL.
+    const rewardSourceBattle = await this.prisma.battleSession.findUniqueOrThrow({
+      where: { id: battleId },
+      include: {
+        players: true,
+        questions: true,
+        submissions: true,
+      },
+    });
+
+    const rewardPlanByUserId = new Map<
+      string,
+      Awaited<ReturnType<RewardService['calculateRewards']>>
+    >();
+
+    for (const player of rewardSourceBattle.players) {
+      if (!player.result) {
+        continue;
+      }
+
+      const assignedQuestions = rewardSourceBattle.questions.filter((question) => {
+        if (rewardSourceBattle.format === 'DUEL_1V1') {
+          return true;
+        }
+
+        return question.assignedRole === player.role;
+      }).length;
+
+      const answeredQuestions = rewardSourceBattle.submissions.filter(
+        (submission) => submission.userId === player.userId,
+      ).length;
+
+      const opponentUserIds = rewardSourceBattle.players
+        .filter((item) => item.team !== player.team)
+        .map((item) => item.userId);
+
+      rewardPlanByUserId.set(
+        player.userId,
+        await this.rewardService.calculateRewards({
+          userId: player.userId,
+          battleId: rewardSourceBattle.id,
+          format: rewardSourceBattle.format,
+          result: player.result,
+          score: player.score,
+          answeredQuestions,
+          assignedQuestions,
+          opponentUserIds,
+        }),
+      );
     }
 
     const settlement = await this.prisma.$transaction(async (tx) => {
@@ -83,11 +139,26 @@ export class RankRewardService {
           player.userId,
         );
 
-        const rankResult = this.rankService.applyResult(
-          profile.rankTier,
-          profile.stars,
-          player.result,
-        );
+        const rankProtectionItem =
+          player.result === BattlePlayerResult.LOSE
+            ? await this.shopService.consumeRankProtectionIfEligible(
+                tx,
+                player.userId,
+                battle.id,
+              )
+            : null;
+
+        const rankResult = rankProtectionItem
+          ? {
+              newTier: profile.rankTier,
+              newStars: profile.stars,
+              delta: 0,
+            }
+          : this.rankService.applyResult(
+              profile.rankTier,
+              profile.stars,
+              player.result,
+            );
 
         const newBestTier =
           this.compareTier(rankResult.newTier, profile.bestRankTier) > 0
@@ -149,23 +220,38 @@ export class RankRewardService {
 
             result: player.result,
             starDelta: rankResult.delta,
+            reason: rankProtectionItem
+              ? `Protected by ${rankProtectionItem.itemCode}`
+              : undefined,
           },
         });
 
-        const opponentUserIds = battle.players
-          .filter((item) => item.team !== player.team)
-          .map((item) => item.userId);
+        const rewards = rewardPlanByUserId.get(player.userId) ?? [];
 
-        const rewards = await this.rewardService.calculateRewards({
-          userId: player.userId,
-          battleId: battle.id,
-          format: battle.format,
-          result: player.result,
-          score: player.score,
-          answeredQuestions,
-          assignedQuestions,
-          opponentUserIds,
-        });
+        const doubleRewardItem = await this.shopService.consumeDoubleRewardIfAvailable(
+          tx,
+          player.userId,
+          battle.id,
+        );
+
+        const effectiveRewards = doubleRewardItem
+          ? rewards.map((reward) => {
+              if (reward.amount <= 0) {
+                return reward;
+              }
+
+              return {
+                ...reward,
+                amount: reward.amount * 2,
+                reason: `${reward.reason} doubled by ${doubleRewardItem.itemCode}`,
+                metadata: {
+                  ...reward.metadata,
+                  doubleRewardItemId: doubleRewardItem.id,
+                  doubleRewardApplied: true,
+                },
+              };
+            })
+          : rewards;
 
         const wallet = await tx.playerRewardWallet.findUniqueOrThrow({
           where: {
@@ -175,7 +261,7 @@ export class RankRewardService {
 
         let balance = wallet.brainPointBalance;
 
-        for (const reward of rewards) {
+        for (const reward of effectiveRewards) {
           balance += reward.amount;
 
           await tx.rewardLedger.create({
@@ -207,14 +293,14 @@ export class RankRewardService {
             brainPointBalance: balance,
 
             totalEarned: {
-              increment: rewards
+              increment: effectiveRewards
                 .filter((item) => item.amount > 0)
                 .reduce((sum, item) => sum + item.amount, 0),
             },
 
             totalSpent: {
               increment: Math.abs(
-                rewards
+                effectiveRewards
                   .filter((item) => item.amount < 0)
                   .reduce((sum, item) => sum + item.amount, 0),
               ),

@@ -17,10 +17,14 @@ import { env } from '../common/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminListRoomsDto, ChangeSlotDto, CreateRoomDto, JoinRoomDto } from './dto';
 import { toRoomResponse } from './room.mapper';
+import { RoomEventsService } from './room-events.service';
 
 @Injectable()
 export class RoomService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly events: RoomEventsService,
+  ) { }
 
   async createRoom(userId: string, dto: CreateRoomDto) {
     const normalized = this.normalizeCreateRoomDto(dto);
@@ -204,7 +208,24 @@ export class RoomService {
       });
     });
 
-    return toRoomResponse(updatedRoom);
+    const response = toRoomResponse(updatedRoom);
+
+    this.events.emitToRoom(roomId, 'room.ready.changed', {
+      room: response,
+      userId,
+      isReady,
+    });
+
+    this.events.emitToRoom(roomId, 'room.updated', response);
+
+    if (response.status === BattleRoomStatus.READY) {
+      this.events.emitToRoom(roomId, 'room.ready.all', {
+        room: response,
+        message: 'All players are ready. Host can start battle.',
+      });
+    }
+
+    return response;
   }
 
   async changeSlot(userId: string, roomId: string, dto: ChangeSlotDto) {
@@ -247,7 +268,16 @@ export class RoomService {
       });
     });
 
-    return toRoomResponse(updatedRoom);
+    const response = toRoomResponse(updatedRoom);
+
+    this.events.emitToRoom(roomId, 'room.slot.changed', {
+      room: response,
+      userId,
+    });
+
+    this.events.emitToRoom(roomId, 'room.updated', response);
+
+    return response;
   }
 
   async leaveRoom(userId: string, roomId: string) {
@@ -311,7 +341,16 @@ export class RoomService {
       });
     });
 
-    return toRoomResponse(updatedRoom);
+    const response = toRoomResponse(updatedRoom);
+
+    this.events.emitToRoom(roomId, 'room.player.left', {
+      room: response,
+      userId,
+    });
+
+    this.events.emitToRoom(roomId, 'room.updated', response);
+
+    return response;
   }
 
   async cancelRoom(userId: string, roomId: string) {
@@ -340,7 +379,16 @@ export class RoomService {
       include: { members: true },
     });
 
-    return toRoomResponse(updatedRoom);
+    const response = toRoomResponse(updatedRoom);
+
+    this.events.emitToRoom(roomId, 'room.cancelled', {
+      room: response,
+      userId,
+    });
+
+    this.events.emitToRoom(roomId, 'room.updated', response);
+
+    return response;
   }
 
   async startCheck(userId: string, roomId: string) {

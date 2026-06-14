@@ -23,10 +23,13 @@ import {
   AdminListBattlesDto,
   CreateBattleFromRoomDto,
   ListMyBattleHistoryDto,
+  StartBattleFromRoomDto,
   SubmitAnswerDto,
 } from './dto';
 import { toBattleResponse } from './battle.mapper';
 import { RankRewardService } from '../rank/rank-reward.service';
+import { BattleEventsService } from './battle-events.service';
+import { BlockchainService } from '../blockchain/blockchain.service';
 
 @Injectable()
 export class BattleService {
@@ -34,6 +37,8 @@ export class BattleService {
     private readonly prisma: PrismaService,
     private readonly roomService: RoomService,
     private readonly rankRewardService: RankRewardService,
+    private readonly blockchainService: BlockchainService,
+    private readonly events: BattleEventsService,
   ) { }
 
   async createFromRoom(userId: string, roomId: string, dto: CreateBattleFromRoomDto) {
@@ -146,12 +151,73 @@ export class BattleService {
       });
     });
 
-    return toBattleResponse(battle);
+    const response = toBattleResponse(battle);
+
+    this.events.emitToRoom(room.id, 'battle.created', {
+      roomId: room.id,
+      battle: response,
+    });
+
+    return response;
+  }
+
+  async startFromRoom(
+    userId: string,
+    roomId: string,
+    dto: StartBattleFromRoomDto,
+  ) {
+    const createdBattle = await this.createFromRoom(userId, roomId, {
+      questionCount: dto.questionCount,
+    });
+
+    const battle =
+      dto.autoStart === false
+        ? createdBattle
+        : await this.startBattle(userId, createdBattle.id);
+
+    const fullBattle = await this.getBattleOrThrow(battle.id);
+    const response = toBattleResponse(fullBattle);
+
+    this.events.emitToRoom(roomId, 'battle.created', {
+      roomId,
+      battle: response,
+    });
+
+    if (dto.autoStart !== false) {
+      this.events.emitToRoom(roomId, 'battle.started', {
+        roomId,
+        battle: response,
+      });
+
+      this.events.emitToBattle(battle.id, 'battle.started', {
+        battle: response,
+      });
+    }
+
+    return response;
   }
 
   async getBattle(battleId: string) {
     const battle = await this.getBattleOrThrow(battleId);
     return toBattleResponse(battle);
+  }
+
+  async getBattleRuntimeSnapshot(userId: string, battleId: string) {
+    const battle = await this.getBattleOrThrow(battleId);
+    this.assertPlayerInBattle(userId, battle.players);
+
+    const runtimeBattle =
+      battle.status === BattleStatus.RUNNING
+        ? await this.advanceExpiredQuestionsForBattle(battle)
+        : battle;
+
+    return {
+      battle: toBattleResponse(runtimeBattle),
+      currentQuestion:
+        runtimeBattle.status === BattleStatus.RUNNING
+          ? this.buildCurrentQuestionForUser(userId, runtimeBattle)
+          : null,
+    };
   }
 
   async startBattle(userId: string, battleId: string) {
@@ -178,7 +244,24 @@ export class BattleService {
       },
     });
 
-    return toBattleResponse(updated);
+    const response = toBattleResponse(updated);
+
+    this.events.emitToRoom(updated.roomId, 'battle.started', {
+      roomId: updated.roomId,
+      battle: response,
+    });
+
+    this.events.emitToBattle(updated.id, 'battle.started', {
+      battle: response,
+    });
+
+    const firstQuestions = this.buildCurrentQuestionPayloads(updated);
+
+    for (const item of firstQuestions) {
+      this.events.emitToUser(item.userId, 'battle.question', item.payload);
+    }
+
+    return response;
   }
 
   async getPublicQuestions(userId: string, battleId: string) {
@@ -229,6 +312,32 @@ export class BattleService {
     };
   }
 
+  async getCurrentQuestion(userId: string, battleId: string) {
+    let battle = await this.getBattleOrThrow(battleId);
+
+    this.assertPlayerInBattle(userId, battle.players);
+
+    if (battle.status === BattleStatus.RUNNING) {
+      battle = await this.advanceExpiredQuestionsForBattle(battle);
+    }
+
+    if (battle.status === BattleStatus.FINISHED) {
+      return {
+        battleId: battle.id,
+        status: battle.status,
+        currentQuestion: null,
+        remainingQuestions: 0,
+        message: 'Battle is finished',
+      };
+    }
+
+    if (battle.status !== BattleStatus.RUNNING) {
+      throw new BadRequestException('Battle is not running');
+    }
+
+    return this.buildCurrentQuestionForUser(userId, battle);
+  }
+
   async submitAnswer(userId: string, battleId: string, dto: SubmitAnswerDto) {
     const battle = await this.getBattleOrThrow(battleId);
 
@@ -239,6 +348,16 @@ export class BattleService {
     }
 
     const player = battle.players.find((item) => item.userId === userId)!;
+
+    const activeQuestionPayload = this.buildCurrentQuestionForUser(userId, battle);
+
+    if (!activeQuestionPayload.currentQuestion) {
+      throw new BadRequestException('No active question for this player');
+    }
+
+    if (activeQuestionPayload.currentQuestion.id !== dto.questionSnapshotId) {
+      throw new BadRequestException('Submitted question is not the active question');
+    }
 
     const question = battle.questions.find(
       (item) => item.id === dto.questionSnapshotId,
@@ -264,13 +383,34 @@ export class BattleService {
       throw new BadRequestException('Answer already submitted');
     }
 
-    const answerResult = this.evaluateAnswer(question, dto);
+    const now = new Date();
+    const serverQuestionStartedAt = new Date(
+      activeQuestionPayload.currentQuestion.serverStartedAt,
+    );
+    const serverQuestionEndsAt = new Date(
+      activeQuestionPayload.currentQuestion.serverEndsAt,
+    );
+
+    const responseTimeMs = Math.max(
+      0,
+      now.getTime() - serverQuestionStartedAt.getTime(),
+    );
+
+    const isTimeout = now.getTime() > serverQuestionEndsAt.getTime();
+
+    const answerResult = isTimeout
+      ? {
+        isCorrect: false,
+        status: BattleAnswerStatus.TIMEOUT,
+      }
+      : this.evaluateAnswer(question, dto);
+
     const score = answerResult.isCorrect
       ? this.calculateScore(
         question.baseScore,
         question.speedBonus,
         question.maxTimeSec,
-        dto.responseTimeMs,
+        responseTimeMs,
       )
       : 0;
 
@@ -282,7 +422,7 @@ export class BattleService {
           userId,
           selectedOptionKey: dto.selectedOptionKey?.trim().toUpperCase(),
           textAnswer: dto.textAnswer?.trim(),
-          responseTimeMs: dto.responseTimeMs,
+          responseTimeMs,
           status: answerResult.status,
           isCorrect: answerResult.isCorrect,
           score,
@@ -304,7 +444,7 @@ export class BattleService {
             increment: answerResult.isCorrect ? 1 : 0,
           },
           totalResponseTimeMs: {
-            increment: answerResult.isCorrect ? dto.responseTimeMs : 0,
+            increment: answerResult.isCorrect ? responseTimeMs : 0,
           },
         },
       });
@@ -319,14 +459,56 @@ export class BattleService {
       });
     });
 
+    const battleResponse = toBattleResponse(updatedBattle);
+
+    const submissionPayload = {
+      questionSnapshotId: question.id,
+      userId,
+      isCorrect: answerResult.isCorrect,
+      status: answerResult.status,
+      score,
+      responseTimeMs,
+      submittedAt: now,
+    };
+
+    this.events.emitToUser(userId, 'battle.answer.result', submissionPayload);
+
+    this.events.emitToBattle(battleId, 'battle.score.updated', {
+      battleId,
+      scoreboard: this.buildScoreboard(updatedBattle.players),
+      teamSummary:
+        updatedBattle.format === BattleFormat.TEAM_3V3
+          ? this.buildTeamSummary(updatedBattle.players)
+          : null,
+      submission: submissionPayload,
+    });
+
+    const nextQuestion = this.buildCurrentQuestionForUser(userId, updatedBattle);
+
+    if (nextQuestion.currentQuestion) {
+      this.events.emitToUser(userId, 'battle.question', nextQuestion);
+    }
+
+    if (this.shouldAutoFinishBattle(updatedBattle)) {
+      const finished = await this.finishBattle(updatedBattle.createdBy, battleId);
+
+      this.events.emitToBattle(battleId, 'battle.finished', {
+        battle: finished,
+      });
+
+      return {
+        submission: submissionPayload,
+        battle: finished,
+        nextQuestion: null,
+        finished: true,
+      };
+    }
+
     return {
-      submission: {
-        questionSnapshotId: question.id,
-        isCorrect: answerResult.isCorrect,
-        status: answerResult.status,
-        score,
-      },
-      battle: toBattleResponse(updatedBattle),
+      submission: submissionPayload,
+      battle: battleResponse,
+      nextQuestion,
+      finished: false,
     };
   }
 
@@ -387,8 +569,27 @@ export class BattleService {
 
     await this.rankRewardService.processBattleResult(battleId);
 
+    try {
+      await this.blockchainService.recordBattleOnchain(battleId);
+    } catch (error) {
+      this.events.emitToBattle(battleId, 'battle.settlement.failed', {
+        battleId,
+        message: error instanceof Error ? error.message : 'UNKNOWN_ERROR',
+      });
+    }
+
     const settledBattle = await this.getBattleOrThrow(battleId);
-    return toBattleResponse(settledBattle);
+    const response = toBattleResponse(settledBattle);
+
+    this.events.emitToBattle(battleId, 'battle.finished', {
+      battle: response,
+    });
+
+    this.events.emitToRoom(settledBattle.roomId, 'battle.finished', {
+      battle: response,
+    });
+
+    return response;
   }
 
   async getResult(battleId: string) {
@@ -498,6 +699,50 @@ export class BattleService {
         score: submission.score,
         submittedAt: submission.submittedAt,
       })),
+    };
+  }
+
+
+
+  async getMyActiveBattle(userId: string) {
+    const battle = await this.prisma.battleSession.findFirst({
+      where: {
+        status: {
+          in: [BattleStatus.CREATED, BattleStatus.RUNNING],
+        },
+        players: {
+          some: {
+            userId,
+          },
+        },
+      },
+      include: {
+        players: true,
+        questions: true,
+        submissions: true,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    if (!battle) {
+      return null;
+    }
+
+    const runtimeBattle =
+      battle.status === BattleStatus.RUNNING
+        ? await this.advanceExpiredQuestionsForBattle(battle)
+        : battle;
+
+    const response = toBattleResponse(runtimeBattle);
+
+    return {
+      ...response,
+      currentQuestion:
+        runtimeBattle.status === BattleStatus.RUNNING
+          ? this.buildCurrentQuestionForUser(userId, runtimeBattle)
+          : null,
     };
   }
 
@@ -804,7 +1049,7 @@ export class BattleService {
           ? undefined
           : this.mapBattleSkillToQuestionSkill(roomSkill);
 
-      const questions = await this.prisma.battleQuestion.findMany({
+      const candidateQuestions = await this.prisma.battleQuestion.findMany({
         where: {
           status: QuestionStatus.APPROVED,
           skill: skillFilter,
@@ -813,11 +1058,9 @@ export class BattleService {
           options: true,
           media: true,
         },
-        orderBy: {
-          createdAt: 'desc',
-        },
-        take: questionCount,
       });
+
+      const questions = this.shuffle(candidateQuestions).slice(0, questionCount);
 
       if (questions.length < questionCount) {
         throw new BadRequestException(
@@ -847,7 +1090,7 @@ export class BattleService {
     for (const role of roles) {
       const skill = this.mapRoleToQuestionSkill(role);
 
-      const questions = await this.prisma.battleQuestion.findMany({
+      const candidateQuestions = await this.prisma.battleQuestion.findMany({
         where: {
           status: QuestionStatus.APPROVED,
           skill,
@@ -856,11 +1099,9 @@ export class BattleService {
           options: true,
           media: true,
         },
-        orderBy: {
-          createdAt: 'desc',
-        },
-        take: questionCount,
       });
+
+      const questions = this.shuffle(candidateQuestions).slice(0, questionCount);
 
       if (questions.length < questionCount) {
         throw new BadRequestException(
@@ -878,6 +1119,17 @@ export class BattleService {
     }
 
     return plan;
+  }
+
+  private shuffle<T>(items: T[]) {
+    const copy = [...items];
+
+    for (let i = copy.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+
+    return copy;
   }
 
   private mapBattleSkillToQuestionSkill(skill: BattleSkill): QuestionSkill {
@@ -898,17 +1150,9 @@ export class BattleService {
       type: QuestionType;
       correctOptionKey: string | null;
       acceptedAnswers: string[];
-      maxTimeSec: number;
     },
     dto: SubmitAnswerDto,
   ) {
-    if (dto.responseTimeMs > question.maxTimeSec * 1000) {
-      return {
-        isCorrect: false,
-        status: BattleAnswerStatus.TIMEOUT,
-      };
-    }
-
     if (question.type === QuestionType.MULTIPLE_CHOICE) {
       const selected = dto.selectedOptionKey?.trim().toUpperCase();
 
@@ -1252,5 +1496,250 @@ export class BattleService {
     };
 
     return [build(RoomTeam.A), build(RoomTeam.B)];
+  }
+
+  private async advanceExpiredQuestionsForBattle(
+    battle: Awaited<ReturnType<BattleService['getBattleOrThrow']>>,
+  ) {
+    if (battle.status !== BattleStatus.RUNNING || !battle.startedAt) {
+      return battle;
+    }
+
+    const now = new Date();
+    const existing = new Set(
+      battle.submissions.map(
+        (submission) => `${submission.userId}:${submission.questionSnapshotId}`,
+      ),
+    );
+
+    const timeoutSubmissions: Array<{
+      battleId: string;
+      questionSnapshotId: string;
+      userId: string;
+      selectedOptionKey: null;
+      textAnswer: null;
+      responseTimeMs: number;
+      status: BattleAnswerStatus;
+      isCorrect: boolean;
+      score: number;
+    }> = [];
+
+    for (const player of battle.players) {
+      const playerQuestions = battle.questions.filter((question) => {
+        if (battle.format === BattleFormat.DUEL_1V1) {
+          return question.assignedRole === null;
+        }
+
+        return question.assignedRole === player.role;
+      });
+
+      for (const question of playerQuestions) {
+        const key = `${player.userId}:${question.id}`;
+
+        if (existing.has(key)) {
+          continue;
+        }
+
+        const startedAt = this.calculateQuestionStartedAt(
+          battle.startedAt,
+          question.questionIndex,
+          question.maxTimeSec,
+        );
+        const endsAt = new Date(startedAt.getTime() + question.maxTimeSec * 1000);
+
+        if (now.getTime() <= endsAt.getTime()) {
+          continue;
+        }
+
+        timeoutSubmissions.push({
+          battleId: battle.id,
+          questionSnapshotId: question.id,
+          userId: player.userId,
+          selectedOptionKey: null,
+          textAnswer: null,
+          responseTimeMs: question.maxTimeSec * 1000,
+          status: BattleAnswerStatus.TIMEOUT,
+          isCorrect: false,
+          score: 0,
+        });
+        existing.add(key);
+      }
+    }
+
+    if (timeoutSubmissions.length === 0) {
+      return battle;
+    }
+
+    const updatedBattle = await this.prisma.$transaction(async (tx) => {
+      await tx.battleAnswerSubmission.createMany({
+        data: timeoutSubmissions,
+        skipDuplicates: true,
+      });
+
+      return tx.battleSession.findUniqueOrThrow({
+        where: { id: battle.id },
+        include: {
+          players: true,
+          questions: true,
+          submissions: true,
+        },
+      });
+    });
+
+    this.events.emitToBattle(battle.id, 'battle.timeout', {
+      battleId: battle.id,
+      submissions: timeoutSubmissions.map((submission) => ({
+        questionSnapshotId: submission.questionSnapshotId,
+        userId: submission.userId,
+        status: submission.status,
+      })),
+    });
+
+    this.events.emitToBattle(battle.id, 'battle.score.updated', {
+      battleId: battle.id,
+      scoreboard: this.buildScoreboard(updatedBattle.players),
+      teamSummary:
+        updatedBattle.format === BattleFormat.TEAM_3V3
+          ? this.buildTeamSummary(updatedBattle.players)
+          : null,
+    });
+
+    if (this.shouldAutoFinishBattle(updatedBattle)) {
+      await this.finishBattle(updatedBattle.createdBy, battle.id);
+      return this.getBattleOrThrow(battle.id);
+    }
+
+    return updatedBattle;
+  }
+
+  private buildCurrentQuestionPayloads(
+    battle: Awaited<ReturnType<BattleService['getBattleOrThrow']>>,
+  ) {
+    return battle.players.map((player) => ({
+      userId: player.userId,
+      payload: this.buildCurrentQuestionForUser(player.userId, battle),
+    }));
+  }
+
+  private buildCurrentQuestionForUser(
+    userId: string,
+    battle: Awaited<ReturnType<BattleService['getBattleOrThrow']>>,
+  ) {
+    const player = battle.players.find((item) => item.userId === userId);
+
+    if (!player) {
+      throw new ForbiddenException('You are not a player in this battle');
+    }
+
+    const playerQuestions = battle.questions
+      .filter((question) => {
+        if (battle.format === BattleFormat.DUEL_1V1) {
+          return question.assignedRole === null;
+        }
+
+        return question.assignedRole === player.role;
+      })
+      .sort((a, b) => a.questionIndex - b.questionIndex);
+
+    const answeredQuestionIds = new Set(
+      battle.submissions
+        .filter((submission) => submission.userId === userId)
+        .map((submission) => submission.questionSnapshotId),
+    );
+
+    const currentQuestion = playerQuestions.find(
+      (question) => !answeredQuestionIds.has(question.id),
+    );
+
+    if (!currentQuestion) {
+      return {
+        battleId: battle.id,
+        status: battle.status,
+        player: {
+          userId: player.userId,
+          team: player.team,
+          role: player.role,
+        },
+        currentQuestion: null,
+        remainingQuestions: 0,
+        message: 'No remaining question for this player',
+      };
+    }
+
+    const serverStartedAt = this.calculateQuestionStartedAt(
+      battle.startedAt,
+      currentQuestion.questionIndex,
+      currentQuestion.maxTimeSec,
+    );
+
+    const serverEndsAt = new Date(
+      serverStartedAt.getTime() + currentQuestion.maxTimeSec * 1000,
+    );
+
+    const now = new Date();
+
+    return {
+      battleId: battle.id,
+      status: battle.status,
+      player: {
+        userId: player.userId,
+        team: player.team,
+        role: player.role,
+      },
+      currentQuestion: {
+        id: currentQuestion.id,
+        questionIndex: currentQuestion.questionIndex,
+        skill: currentQuestion.skill,
+        difficulty: currentQuestion.difficulty,
+        type: currentQuestion.type,
+        assignedRole: currentQuestion.assignedRole,
+        promptText: currentQuestion.promptText,
+        media: currentQuestion.mediaJson,
+        options: currentQuestion.optionsJson,
+        maxTimeSec: currentQuestion.maxTimeSec,
+        baseScore: currentQuestion.baseScore,
+        speedBonus: currentQuestion.speedBonus,
+        serverStartedAt: serverStartedAt.toISOString(),
+        serverEndsAt: serverEndsAt.toISOString(),
+        remainingTimeMs: Math.max(0, serverEndsAt.getTime() - now.getTime()),
+      },
+      remainingQuestions: playerQuestions.length - answeredQuestionIds.size,
+    };
+  }
+
+  private calculateQuestionStartedAt(
+    battleStartedAt: Date | null,
+    questionIndex: number,
+    maxTimeSec: number,
+  ) {
+    const startedAt = battleStartedAt ?? new Date();
+
+    return new Date(
+      startedAt.getTime() + Math.max(0, questionIndex - 1) * maxTimeSec * 1000,
+    );
+  }
+
+  private shouldAutoFinishBattle(
+    battle: Awaited<ReturnType<BattleService['getBattleOrThrow']>>,
+  ) {
+    for (const player of battle.players) {
+      const playerQuestions = battle.questions.filter((question) => {
+        if (battle.format === BattleFormat.DUEL_1V1) {
+          return question.assignedRole === null;
+        }
+
+        return question.assignedRole === player.role;
+      });
+
+      const answeredCount = battle.submissions.filter(
+        (submission) => submission.userId === player.userId,
+      ).length;
+
+      if (answeredCount < playerQuestions.length) {
+        return false;
+      }
+    }
+
+    return true;
   }
 }

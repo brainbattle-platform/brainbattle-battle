@@ -1,5 +1,5 @@
 import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
-import { IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
 
 export class SubmitAnswerDto {
   @ApiProperty({
@@ -24,12 +24,4 @@ export class SubmitAnswerDto {
   @IsOptional()
   @IsString()
   textAnswer?: string;
-
-  @ApiProperty({
-    example: 3200,
-    description: 'Thời gian trả lời tính bằng milliseconds',
-  })
-  @IsInt()
-  @Min(0)
-  responseTimeMs!: number;
 }

@@ -10,6 +10,7 @@ import { RankModule } from './rank/rank.module';
 import { RedisModule } from './redis/redis.module';
 import { RewardModule } from './reward/reward.module';
 import { RoomModule } from './room/room.module';
+import { ShopModule } from './shop/shop.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { RoomModule } from './room/room.module';
     RewardModule,
     RankModule,
     BlockchainModule,
+    ShopModule,
     BattleModule,
   ],
 })

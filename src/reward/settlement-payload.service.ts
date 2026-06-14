@@ -3,9 +3,49 @@ import {
   Injectable,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import {
+  BattleFormat,
+  BattlePlayerResult,
+  BattleRole,
+  RewardLedgerType,
+  RoomTeam,
+} from '@prisma/client';
 import { createHash } from 'crypto';
 import { UserWalletClient } from '../auth/user-wallet.client';
 import { PrismaService } from '../prisma/prisma.service';
+
+type SettlementRewardBreakdownItem = {
+  rewardType: number;
+  rewardTypeLabel: string;
+  amountBp: number;
+  ledgerIds: string[];
+};
+
+type SettlementPlayerPayload = {
+  userId: string;
+  player: string;
+  outcome: BattlePlayerResult;
+  outcomeValue: number;
+  totalBp: number;
+  breakdown: SettlementRewardBreakdownItem[];
+  rewardEntries: Array<{
+    id: string;
+    type: RewardLedgerType;
+    amount: number;
+    balanceAfter: number;
+    reason: string | null;
+  }>;
+};
+
+type BattleSettlementPayload = {
+  battleId: string;
+  mode: BattleFormat;
+  modeValue: number;
+  status: string;
+  finishedAt: string | null;
+  settlementHash: string | null;
+  players: SettlementPlayerPayload[];
+};
 
 @Injectable()
 export class SettlementPayloadService {
@@ -32,6 +72,14 @@ export class SettlementPayloadService {
       orderBy: { createdAt: 'asc' },
     });
 
+    const ledgersByUserId = new Map<string, typeof ledgers>();
+
+    for (const ledger of ledgers) {
+      const current = ledgersByUserId.get(ledger.userId) ?? [];
+      current.push(ledger);
+      ledgersByUserId.set(ledger.userId, current);
+    }
+
     const walletMap = new Map<string, string>();
 
     for (const player of battle.players) {
@@ -46,27 +94,46 @@ export class SettlementPayloadService {
       walletMap.set(player.userId, wallet.walletAddress);
     }
 
-    const payload = {
+    const sortedPlayers = [...battle.players].sort((a, b) =>
+      this.compareBattlePlayers(a.team, a.role, a.userId, b.team, b.role, b.userId),
+    );
+
+    const payload: BattleSettlementPayload = {
       battleId: battle.id,
       mode: battle.format,
+      modeValue: this.mapBattleModeToSolidity(battle.format),
       status: battle.status,
-      finishedAt: battle.finishedAt,
+      finishedAt: battle.finishedAt?.toISOString() ?? null,
       settlementHash: battle.settlement.settlementHash,
-      players: battle.players.map((player) => ({
-        userId: player.userId,
-        walletAddress: walletMap.get(player.userId),
-        result: player.result,
-        score: player.score,
-        team: player.team,
-        role: player.role,
-      })),
-      rewards: ledgers.map((ledger) => ({
-        userId: ledger.userId,
-        walletAddress: walletMap.get(ledger.userId),
-        type: ledger.type,
-        amount: ledger.amount,
-        balanceAfter: ledger.balanceAfter,
-      })),
+      players: sortedPlayers.map((player) => {
+        if (!player.result) {
+          throw new BadRequestException(
+            `Missing battle result for player ${player.userId}`,
+          );
+        }
+
+        const playerLedgers = ledgersByUserId.get(player.userId) ?? [];
+        const rewardEntries = playerLedgers.map((ledger) => ({
+          id: ledger.id,
+          type: ledger.type,
+          amount: ledger.amount,
+          balanceAfter: ledger.balanceAfter,
+          reason: ledger.reason,
+        }));
+
+        const breakdown = this.groupBreakdownItems(playerLedgers);
+        const totalBp = breakdown.reduce((sum, item) => sum + item.amountBp, 0);
+
+        return {
+          userId: player.userId,
+          player: walletMap.get(player.userId) ?? '',
+          outcome: player.result,
+          outcomeValue: this.mapBattleOutcomeToSolidity(player.result),
+          totalBp,
+          breakdown,
+          rewardEntries,
+        };
+      }),
     };
 
     return {
@@ -79,6 +146,121 @@ export class SettlementPayloadService {
     return createHash('sha256')
       .update(this.stableStringify(payload))
       .digest('hex');
+  }
+
+  private compareBattlePlayers(
+    teamA: RoomTeam,
+    roleA: BattleRole | null,
+    userIdA: string,
+    teamB: RoomTeam,
+    roleB: BattleRole | null,
+    userIdB: string,
+  ) {
+    const teamOrder: Record<RoomTeam, number> = {
+      [RoomTeam.A]: 0,
+      [RoomTeam.B]: 1,
+    };
+
+    const roleOrder: Record<BattleRole, number> = {
+      [BattleRole.GRAMMAR]: 0,
+      [BattleRole.LISTENING]: 1,
+      [BattleRole.VOCABULARY]: 2,
+    };
+
+    const teamDiff = teamOrder[teamA] - teamOrder[teamB];
+
+    if (teamDiff !== 0) {
+      return teamDiff;
+    }
+
+    const roleRankA = roleA ? roleOrder[roleA] : 99;
+    const roleRankB = roleB ? roleOrder[roleB] : 99;
+    const roleDiff = roleRankA - roleRankB;
+
+    if (roleDiff !== 0) {
+      return roleDiff;
+    }
+
+    return userIdA.localeCompare(userIdB);
+  }
+
+  private groupBreakdownItems(
+    ledgers: Array<{
+      id: string;
+      type: RewardLedgerType;
+      amount: number;
+      balanceAfter: number;
+      reason: string | null;
+    }>,
+  ) {
+    const grouped = new Map<number, SettlementRewardBreakdownItem>();
+
+    for (const ledger of ledgers) {
+      if (ledger.amount <= 0) {
+        continue;
+      }
+
+      const rewardType = this.mapRewardTypeToSolidity(ledger.type);
+
+      if (rewardType === null) {
+        continue;
+      }
+
+      const existing = grouped.get(rewardType);
+
+      if (existing) {
+        existing.amountBp += ledger.amount;
+        existing.ledgerIds.push(ledger.id);
+        continue;
+      }
+
+      grouped.set(rewardType, {
+        rewardType,
+        rewardTypeLabel: ledger.type,
+        amountBp: ledger.amount,
+        ledgerIds: [ledger.id],
+      });
+    }
+
+    return [...grouped.values()].sort((a, b) => a.rewardType - b.rewardType);
+  }
+
+  private mapBattleModeToSolidity(mode: BattleFormat) {
+    return mode === BattleFormat.DUEL_1V1 ? 0 : 1;
+  }
+
+  private mapBattleOutcomeToSolidity(outcome: BattlePlayerResult) {
+    switch (outcome) {
+      case BattlePlayerResult.WIN:
+        return 0;
+      case BattlePlayerResult.LOSE:
+        return 1;
+      case BattlePlayerResult.DRAW:
+        return 2;
+      default:
+        return 4;
+    }
+  }
+
+  private mapRewardTypeToSolidity(type: RewardLedgerType) {
+    switch (type) {
+      case RewardLedgerType.PARTICIPATION:
+        return 0;
+      case RewardLedgerType.WIN:
+        return 1;
+      case RewardLedgerType.DRAW:
+        return 2;
+      case RewardLedgerType.LOSE:
+        return 3;
+      case RewardLedgerType.PERFORMANCE:
+        return 4;
+      case RewardLedgerType.STREAK:
+        return 5;
+      case RewardLedgerType.SEASON:
+        return 6;
+      default:
+        return null;
+    }
   }
 
   private stableStringify(value: unknown): string {
