@@ -41,9 +41,9 @@ export class MatchmakingService {
   async joinQueue(userId: string, dto: JoinMatchmakingDto) {
     const normalized = this.normalizeJoinDto(dto);
 
-    await this.expireOldWaitingEntries();
+    await this.expireOldWaitingEntries(userId);
 
-    const existingActive = await this.prisma.matchmakingQueueEntry.findFirst({
+    let existingActive = await this.prisma.matchmakingQueueEntry.findFirst({
       where: {
         userId,
         status: {
@@ -54,6 +54,17 @@ export class MatchmakingService {
         createdAt: 'desc',
       },
     });
+
+    if (existingActive && (await this.cleanupStaleActiveEntry(existingActive))) {
+      existingActive = null;
+    }
+
+    // Changing mode/skill/role must create a new queue entry. Otherwise a user
+    // can be trapped in an old active queue and keep reopening an old room.
+    if (existingActive && !this.matchesJoinRequest(existingActive, normalized)) {
+      await this.cancelActiveEntry(existingActive);
+      existingActive = null;
+    }
 
     if (existingActive) {
       const room = existingActive.roomId
@@ -102,7 +113,9 @@ export class MatchmakingService {
     const entry = await this.prisma.matchmakingQueueEntry.findFirst({
       where: {
         userId,
-        status: MatchmakingQueueStatus.WAITING,
+        status: {
+          in: [MatchmakingQueueStatus.WAITING, MatchmakingQueueStatus.MATCHED],
+        },
       },
       orderBy: {
         createdAt: 'desc',
@@ -120,14 +133,62 @@ export class MatchmakingService {
       return payload;
     }
 
-    const updated = await this.prisma.matchmakingQueueEntry.update({
-      where: {
-        id: entry.id,
-      },
-      data: {
-        status: MatchmakingQueueStatus.CANCELLED,
-        cancelledAt: new Date(),
-      },
+    const now = new Date();
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (entry.roomId) {
+        await tx.matchmakingQueueEntry.updateMany({
+          where: {
+            roomId: entry.roomId,
+            status: {
+              in: [MatchmakingQueueStatus.WAITING, MatchmakingQueueStatus.MATCHED],
+            },
+          },
+          data: {
+            status: MatchmakingQueueStatus.CANCELLED,
+            cancelledAt: now,
+          },
+        });
+
+        await tx.roomMember.updateMany({
+          where: {
+            roomId: entry.roomId,
+            leftAt: null,
+          },
+          data: {
+            leftAt: now,
+            isReady: false,
+          },
+        });
+
+        await tx.battleRoom.updateMany({
+          where: {
+            id: entry.roomId,
+            status: {
+              in: [BattleRoomStatus.WAITING, BattleRoomStatus.READY],
+            },
+          },
+          data: {
+            status: BattleRoomStatus.CANCELLED,
+            closedAt: now,
+            closeReason: 'QUEUE_LEFT',
+          },
+        });
+      } else {
+        await tx.matchmakingQueueEntry.update({
+          where: {
+            id: entry.id,
+          },
+          data: {
+            status: MatchmakingQueueStatus.CANCELLED,
+            cancelledAt: now,
+          },
+        });
+      }
+
+      return tx.matchmakingQueueEntry.findUniqueOrThrow({
+        where: { id: entry.id },
+      });
     });
 
     const payload = {
@@ -141,8 +202,10 @@ export class MatchmakingService {
   }
 
   async getMyQueueStatus(userId: string) {
-    await this.expireOldWaitingEntries(userId);
-
+    // IMPORTANT: status is polled by mobile/socket very often. Do not run
+    // global cleanup here; with Supabase pooler + Prisma connection_limit this
+    // caused P2024 connection starvation. Only read the user's latest active
+    // entry, then lazily validate that specific entry below.
     const entry = await this.prisma.matchmakingQueueEntry.findFirst({
       where: {
         userId,
@@ -156,6 +219,14 @@ export class MatchmakingService {
     });
 
     if (!entry) {
+      return {
+        status: 'IDLE',
+        entry: null,
+        room: null,
+      };
+    }
+
+    if (await this.cleanupStaleActiveEntry(entry)) {
       return {
         status: 'IDLE',
         entry: null,
@@ -179,6 +250,41 @@ export class MatchmakingService {
       entry: toMatchmakingEntryResponse(entry),
       room,
     };
+  }
+
+
+  private matchesJoinRequest(entry: MatchmakingQueueEntry, normalized: NormalizedJoinInput) {
+    return (
+      entry.format === normalized.format &&
+      entry.skill === normalized.skill &&
+      (entry.role ?? null) === normalized.role
+    );
+  }
+
+  private async cancelActiveEntry(entry: MatchmakingQueueEntry) {
+    const now = new Date();
+
+    await this.prisma.matchmakingQueueEntry.updateMany({
+      where: {
+        userId: entry.userId,
+        status: { in: [MatchmakingQueueStatus.WAITING, MatchmakingQueueStatus.MATCHED] },
+      },
+      data: { status: MatchmakingQueueStatus.CANCELLED, cancelledAt: now },
+    });
+
+    if (entry.roomId) {
+      await this.prisma.battleRoom.updateMany({
+        where: {
+          id: entry.roomId,
+          status: { in: [BattleRoomStatus.WAITING, BattleRoomStatus.READY] },
+        },
+        data: { status: BattleRoomStatus.CANCELLED, closedAt: now, closeReason: 'QUEUE_CHANGED' },
+      });
+      await this.prisma.roomMember.updateMany({
+        where: { roomId: entry.roomId, userId: entry.userId, leftAt: null },
+        data: { leftAt: now, isReady: false },
+      });
+    }
   }
 
   private async joinDuelQueue(
@@ -625,19 +731,202 @@ export class MatchmakingService {
     return RoomTeam.B;
   }
 
-  private async expireOldWaitingEntries(userId?: string) {
+  private async expireOldWaitingEntries(userId: string) {
+    const now = new Date();
+
+    // This method intentionally cleans only the current user's matchmaking
+    // records. The previous implementation scanned BattleRoom globally on every
+    // queue/status refresh, which is lethal with Supabase transaction pooler and
+    // Prisma connection_limit=1. Queue status is called by websocket/polling, so
+    // it must stay cheap and deterministic.
+
     await this.prisma.matchmakingQueueEntry.updateMany({
       where: {
-        ...(userId ? { userId } : {}),
+        userId,
         status: MatchmakingQueueStatus.WAITING,
-        expiresAt: {
-          lte: new Date(),
-        },
+        expiresAt: { lte: now },
       },
-      data: {
-        status: MatchmakingQueueStatus.EXPIRED,
-      },
+      data: { status: MatchmakingQueueStatus.EXPIRED },
     });
+
+    const activeEntries = await this.prisma.matchmakingQueueEntry.findMany({
+      where: {
+        userId,
+        status: {
+          in: [MatchmakingQueueStatus.WAITING, MatchmakingQueueStatus.MATCHED],
+        },
+        roomId: { not: null },
+      },
+      select: { id: true, roomId: true },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    });
+
+    const roomIds = Array.from(
+      new Set(
+        activeEntries
+          .map((entry) => entry.roomId)
+          .filter((roomId): roomId is string => Boolean(roomId)),
+      ),
+    );
+
+    if (roomIds.length === 0) {
+      await this.prisma.matchmakingQueueEntry.updateMany({
+        where: {
+          userId,
+          status: MatchmakingQueueStatus.MATCHED,
+          roomId: null,
+        },
+        data: { status: MatchmakingQueueStatus.CANCELLED, cancelledAt: now },
+      });
+      return;
+    }
+
+    const rooms = await this.prisma.battleRoom.findMany({
+      where: { id: { in: roomIds } },
+      select: { id: true, status: true, expiresAt: true },
+    });
+
+    const expiredRoomIds = rooms
+      .filter(
+        (room) =>
+          (room.status === BattleRoomStatus.WAITING ||
+            room.status === BattleRoomStatus.READY) &&
+          room.expiresAt != null &&
+          room.expiresAt.getTime() <= now.getTime(),
+      )
+      .map((room) => room.id);
+
+    if (expiredRoomIds.length > 0) {
+      await this.prisma.battleRoom.updateMany({
+        where: { id: { in: expiredRoomIds } },
+        data: {
+          status: BattleRoomStatus.EXPIRED,
+          closedAt: now,
+          closeReason: 'ROOM_EXPIRED',
+        },
+      });
+
+      await this.prisma.roomMember.updateMany({
+        where: { roomId: { in: expiredRoomIds }, leftAt: null },
+        data: { leftAt: now, isReady: false },
+      });
+    }
+
+    const terminalRoomIds = rooms
+      .filter(
+        (room) =>
+          expiredRoomIds.includes(room.id) ||
+          room.status === BattleRoomStatus.CANCELLED ||
+          room.status === BattleRoomStatus.EXPIRED ||
+          room.status === BattleRoomStatus.FINISHED,
+      )
+      .map((room) => room.id);
+
+    if (terminalRoomIds.length > 0) {
+      await this.prisma.matchmakingQueueEntry.updateMany({
+        where: {
+          userId,
+          roomId: { in: terminalRoomIds },
+          status: {
+            in: [MatchmakingQueueStatus.WAITING, MatchmakingQueueStatus.MATCHED],
+          },
+        },
+        data: { status: MatchmakingQueueStatus.CANCELLED, cancelledAt: now },
+      });
+    }
+
+    await this.prisma.matchmakingQueueEntry.updateMany({
+      where: {
+        userId,
+        status: MatchmakingQueueStatus.MATCHED,
+        roomId: null,
+      },
+      data: { status: MatchmakingQueueStatus.CANCELLED, cancelledAt: now },
+    });
+  }
+
+  private async cleanupStaleActiveEntry(entry: MatchmakingQueueEntry) {
+    if (entry.status === MatchmakingQueueStatus.WAITING) {
+      if (entry.expiresAt && entry.expiresAt.getTime() <= Date.now()) {
+        await this.prisma.matchmakingQueueEntry.update({
+          where: { id: entry.id },
+          data: { status: MatchmakingQueueStatus.EXPIRED },
+        });
+        return true;
+      }
+
+      return false;
+    }
+
+    if (!entry.roomId) {
+      await this.prisma.matchmakingQueueEntry.update({
+        where: { id: entry.id },
+        data: { status: MatchmakingQueueStatus.CANCELLED, cancelledAt: new Date() },
+      });
+      return true;
+    }
+
+    const room = await this.prisma.battleRoom.findUnique({
+      where: { id: entry.roomId },
+      include: { members: true },
+    });
+
+    const now = new Date();
+    const expired =
+      room?.expiresAt != null &&
+      room.expiresAt.getTime() <= now.getTime() &&
+      (room.status === BattleRoomStatus.WAITING || room.status === BattleRoomStatus.READY);
+
+    const terminal =
+      !room ||
+      expired ||
+      room.status === BattleRoomStatus.CANCELLED ||
+      room.status === BattleRoomStatus.EXPIRED ||
+      room.status === BattleRoomStatus.FINISHED;
+
+    if (!terminal) {
+      return false;
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (room && expired) {
+        await tx.battleRoom.update({
+          where: { id: room.id },
+          data: {
+            status: BattleRoomStatus.EXPIRED,
+            closedAt: now,
+            closeReason: 'ROOM_EXPIRED',
+          },
+        });
+
+        await tx.roomMember.updateMany({
+          where: {
+            roomId: room.id,
+            leftAt: null,
+          },
+          data: {
+            leftAt: now,
+            isReady: false,
+          },
+        });
+      }
+
+      await tx.matchmakingQueueEntry.updateMany({
+        where: {
+          roomId: entry.roomId,
+          status: {
+            in: [MatchmakingQueueStatus.WAITING, MatchmakingQueueStatus.MATCHED],
+          },
+        },
+        data: {
+          status: expired ? MatchmakingQueueStatus.EXPIRED : MatchmakingQueueStatus.CANCELLED,
+          cancelledAt: expired ? null : now,
+        },
+      });
+    });
+
+    return true;
   }
 
   private async generateUniqueRoomCode(tx: Prisma.TransactionClient) {

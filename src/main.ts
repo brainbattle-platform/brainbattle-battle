@@ -2,19 +2,30 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { env, validateEnv } from './common/env';
+
+function enableBigIntJsonSerialization() {
+  if (typeof (BigInt.prototype as any).toJSON !== 'function') {
+    Object.defineProperty(BigInt.prototype, 'toJSON', {
+      value: function () {
+        return this.toString();
+      },
+      writable: true,
+      configurable: true,
+    });
+  }
+}
 
 async function bootstrap() {
-  validateEnv();
+  enableBigIntJsonSerialization();
 
   const app = await NestFactory.create(AppModule);
+
+  app.setGlobalPrefix('api');
 
   app.enableCors({
     origin: true,
     credentials: true,
   });
-
-  app.setGlobalPrefix('api');
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -25,33 +36,21 @@ async function bootstrap() {
   );
 
   const config = new DocumentBuilder()
-    .setTitle('BrainBattle Battle Service')
+    .setTitle('BrainBattle Battle API')
     .setDescription(
-      'Battle backend API: room, question bank, battle core, rank, reward, and blockchain evidence',
+      'Realtime battle, matchmaking, rank, reward, shop and blockchain proof APIs.',
     )
-    .setVersion('0.1.0')
-    .addBearerAuth(
-      {
-        type: 'http',
-        scheme: 'bearer',
-        bearerFormat: 'JWT',
-        description: 'Supabase access token',
-      },
-      'bearer',
-    )
+    .setVersion('1.0')
+    .addBearerAuth()
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('api/docs', app, document);
 
-  SwaggerModule.setup('api/docs', app, document, {
-    swaggerOptions: {
-      persistAuthorization: true,
-    },
-  });
+  const port = process.env.PORT || 3001;
+  await app.listen(port);
 
-  await app.listen(env.PORT, '0.0.0.0');
-
-  console.log(`BrainBattle Battle API running at http://localhost:${env.PORT}/api/docs`);
+  console.log(`BrainBattle Battle API running at http://localhost:${port}/api/docs`);
 }
 
 bootstrap();

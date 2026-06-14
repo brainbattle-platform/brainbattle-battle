@@ -119,7 +119,8 @@ export class RoomService {
 
   async getRoom(roomId: string) {
     const room = await this.getRoomOrThrow(roomId);
-    return toRoomResponse(room);
+    const normalizedRoom = await this.expireRoomIfNeeded(room);
+    return toRoomResponse(normalizedRoom);
   }
 
   async getRoomByCode(roomCode: string) {
@@ -132,7 +133,8 @@ export class RoomService {
       throw new NotFoundException('Room not found');
     }
 
-    return toRoomResponse(room);
+    const normalizedRoom = await this.expireRoomIfNeeded(room);
+    return toRoomResponse(normalizedRoom);
   }
 
   async getMyActiveRoom(userId: string) {
@@ -166,7 +168,16 @@ export class RoomService {
       return null;
     }
 
-    return toRoomResponse(member.room);
+    const normalizedRoom = await this.expireRoomIfNeeded(member.room);
+    if (
+      normalizedRoom.status !== BattleRoomStatus.WAITING &&
+      normalizedRoom.status !== BattleRoomStatus.READY &&
+      normalizedRoom.status !== BattleRoomStatus.PLAYING
+    ) {
+      return null;
+    }
+
+    return toRoomResponse(normalizedRoom);
   }
 
   async setReady(userId: string, roomId: string, isReady: boolean) {
@@ -599,6 +610,53 @@ export class RoomService {
     ) {
       throw new BadRequestException('Room is not joinable');
     }
+  }
+
+  private async expireRoomIfNeeded<
+    T extends {
+      id: string;
+      status: BattleRoomStatus;
+      expiresAt: Date | null;
+      members: unknown[];
+    },
+  >(room: T): Promise<T> {
+    if (
+      (room.status === BattleRoomStatus.WAITING ||
+        room.status === BattleRoomStatus.READY) &&
+      room.expiresAt &&
+      room.expiresAt.getTime() <= Date.now()
+    ) {
+      const now = new Date();
+
+      await this.prisma.battleRoom.update({
+        where: { id: room.id },
+        data: {
+          status: BattleRoomStatus.EXPIRED,
+          closedAt: now,
+          closeReason: 'ROOM_EXPIRED',
+        },
+      });
+
+      await this.prisma.roomMember.updateMany({
+        where: {
+          roomId: room.id,
+          leftAt: null,
+        },
+        data: {
+          leftAt: now,
+          isReady: false,
+        },
+      });
+
+      const refreshed = await this.prisma.battleRoom.findUniqueOrThrow({
+        where: { id: room.id },
+        include: { members: true },
+      });
+
+      return refreshed as unknown as T;
+    }
+
+    return room;
   }
 
   private async getRoomOrThrow(roomId: string) {

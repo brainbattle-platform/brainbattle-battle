@@ -88,6 +88,7 @@ export const env = {
   CONTRACT_ADDRESS: readString('CONTRACT_ADDRESS'),
   CHAIN_ID: readNumber('CHAIN_ID', 31337),
 
+  REDIS_ENABLED: readBoolean('REDIS_ENABLED', false),
   REDIS_URL: readString('REDIS_URL'),
   REDIS_HOST: readString('REDIS_HOST', 'localhost'),
   REDIS_PORT: readNumber('REDIS_PORT', 6379),

@@ -58,12 +58,9 @@ export class ShopService {
   }
 
   async getMyInventory(userId: string) {
-    // Battle Home calls this together with rank, wallet and active-battle APIs.
-    // Keep it lightweight so one slow shop/profile seed does not kill the whole
-    // mobile Battle Arena with 503/P2028.
-    await this.ensureDefaultShopItems();
-    await this.ensureRewardProfile(userId);
-
+    // Pure read endpoint: never seed/upsert here. Battle Home calls inventory
+    // together with rank/reward/room APIs; any write here amplifies Supabase
+    // pooler pressure and breaks the live demo under multiple devices.
     return this.prisma.playerInventoryItem.findMany({
       where: { userId },
       include: { item: true },
@@ -245,12 +242,9 @@ export class ShopService {
   }
 
   private async ensureDefaultShopItems() {
-    // Mobile Battle Home can request shop/rank/wallet/room/battle in parallel.
-    // With Supabase pooler and small local pools, running all seed upserts in
-    // Promise.all starves Prisma connections and causes P2024/P2028.
-    //
-    // Seed once per process and do it sequentially. The table is tiny (3 rows),
-    // so this is faster and much safer for demo/prod-like environments.
+    // Seed once per process using at most two DB round-trips. The previous
+    // implementation did one upsert per item on every cold dashboard load;
+    // with Supabase session pooler this repeatedly hit EMAXCONNSESSION.
     if (!this.defaultShopItemsReady) {
       this.defaultShopItemsReady = this.seedDefaultShopItems().catch((error) => {
         this.defaultShopItemsReady = undefined;
@@ -262,13 +256,19 @@ export class ShopService {
   }
 
   private async seedDefaultShopItems() {
-    for (const item of DEFAULT_SHOP_ITEMS) {
-      await this.prisma.shopItem.upsert({
-        where: { code: item.code },
-        create: item,
-        update: item,
-      });
+    const codes = DEFAULT_SHOP_ITEMS.map((item) => item.code);
+    const existingCount = await this.prisma.shopItem.count({
+      where: { code: { in: codes } },
+    });
+
+    if (existingCount >= DEFAULT_SHOP_ITEMS.length) {
+      return;
     }
+
+    await this.prisma.shopItem.createMany({
+      data: DEFAULT_SHOP_ITEMS,
+      skipDuplicates: true,
+    });
   }
 
   private async ensureRewardProfile(userId: string) {

@@ -64,7 +64,19 @@ export class SettlementPayloadService {
     });
 
     if (!battle.settlement) {
-      throw new BadRequestException('Battle settlement not found');
+      throw new BadRequestException('Battle settlement not found. Finish the battle before recording on-chain.');
+    }
+
+    if (battle.status !== 'FINISHED') {
+      throw new BadRequestException('Only FINISHED battles can be recorded on-chain');
+    }
+
+    const expectedPlayerCount = battle.format === 'DUEL_1V1' ? 2 : 6;
+
+    if (battle.players.length !== expectedPlayerCount) {
+      throw new BadRequestException(
+        `Invalid player count for ${battle.format}. Expected ${expectedPlayerCount}, got ${battle.players.length}`,
+      );
     }
 
     const ledgers = await this.prisma.rewardLedger.findMany({
@@ -87,7 +99,13 @@ export class SettlementPayloadService {
 
       if (!wallet.walletAddress) {
         throw new ServiceUnavailableException(
-          `Missing wallet address for user ${player.userId}`,
+          `Missing primary wallet address for user ${player.userId}. Link a wallet before on-chain settlement.`,
+        );
+      }
+
+      if (!/^0x[a-fA-F0-9]{40}$/.test(wallet.walletAddress)) {
+        throw new BadRequestException(
+          `Invalid EVM wallet address for user ${player.userId}`,
         );
       }
 

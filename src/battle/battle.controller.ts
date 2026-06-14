@@ -17,6 +17,7 @@ import { AuthGuard } from '../auth/auth.guard';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { BattleService } from './battle.service';
+import { BlockchainService } from '../blockchain/blockchain.service';
 import {
   CreateBattleFromRoomDto,
   ListMyBattleHistoryDto,
@@ -29,7 +30,10 @@ import {
 @UseGuards(AuthGuard)
 @Controller('battles')
 export class BattleController {
-  constructor(private readonly battleService: BattleService) { }
+  constructor(
+    private readonly battleService: BattleService,
+    private readonly blockchainService: BlockchainService,
+  ) { }
 
 
 
@@ -119,6 +123,18 @@ export class BattleController {
   @ApiParam({ name: 'battleId' })
   getResult(@Param('battleId') battleId: string) {
     return this.battleService.getResult(battleId);
+  }
+
+
+  @Get(':battleId/onchain-record')
+  @ApiOperation({ summary: 'Get on-chain proof for current participant' })
+  @ApiParam({ name: 'battleId' })
+  async getParticipantOnchainRecord(
+    @CurrentUser() user: AuthUser,
+    @Param('battleId') battleId: string,
+  ) {
+    await this.battleService.getBattleSummary(user.id, battleId);
+    return this.blockchainService.getOnchainRecord(battleId);
   }
 
   @Post(':battleId/start')
