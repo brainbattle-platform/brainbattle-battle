@@ -11,23 +11,19 @@ export class RankService {
         tx: Prisma.TransactionClient,
         userId: string,
     ) {
-        let profile = await tx.playerRankProfile.findUnique({
+        const profile = await tx.playerRankProfile.upsert({
             where: { userId },
+            create: { userId },
+            update: {},
         });
 
-        if (!profile) {
-            profile = await tx.playerRankProfile.create({
-                data: {
-                    userId,
-                },
-            });
-
-            await tx.playerRewardWallet.create({
-                data: {
-                    userId,
-                },
-            });
-        }
+        // Some old users may have a rank profile but no BP wallet yet. The
+        // settlement flow must never crash at findUniqueOrThrow(wallet).
+        await tx.playerRewardWallet.upsert({
+            where: { userId },
+            create: { userId },
+            update: {},
+        });
 
         return profile;
     }

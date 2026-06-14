@@ -23,6 +23,10 @@ export class BlockchainService {
     });
 
     if (existing?.status === OnchainRecordStatus.CONFIRMED) {
+      if (existing.txHash) {
+        await this.syncRewardLedgerTxHash(battleId, existing.txHash);
+      }
+
       return existing;
     }
 
@@ -64,16 +68,18 @@ export class BlockchainService {
       );
     }
 
-    const rewards = payload.rewards
-      .filter((reward) => reward.amount > 0)
-      .map((reward) => ({
-        player: reward.walletAddress,
-        rewardType: this.mapRewardTypeToContract(reward.type),
-        amount: BigInt(reward.amount),
-      }));
+    const rewards = payload.players.map((player) => ({
+      player: player.player,
+      outcome: player.outcomeValue,
+      totalBp: BigInt(player.totalBp),
+      breakdown: player.breakdown.map((item) => ({
+        rewardType: item.rewardType,
+        amountBp: BigInt(item.amountBp),
+      })),
+    }));
 
     if (rewards.length === 0) {
-      throw new BadRequestException('No positive rewards to record on-chain');
+      throw new BadRequestException('No rewards available for on-chain recording');
     }
 
     const provider = new ethers.JsonRpcProvider(env.RPC_URL);
@@ -108,6 +114,7 @@ export class BlockchainService {
     try {
       const tx = await contract.recordBattleResult(
         battleIdBytes32,
+        payload.modeValue,
         resultHashBytes32,
         rewards,
       );
@@ -122,19 +129,23 @@ export class BlockchainService {
       });
 
       const receipt = await tx.wait();
+      const confirmed = receipt?.status === 1;
+
+      if (confirmed) {
+        await this.syncRewardLedgerTxHash(battleId, tx.hash);
+      }
 
       return this.prisma.onchainRecord.update({
         where: { id: pending.id },
         data: {
-          status:
-            receipt?.status === 1
-              ? OnchainRecordStatus.CONFIRMED
-              : OnchainRecordStatus.FAILED,
+          status: confirmed
+            ? OnchainRecordStatus.CONFIRMED
+            : OnchainRecordStatus.FAILED,
           blockNumber: receipt?.blockNumber
             ? BigInt(receipt.blockNumber)
             : undefined,
-          confirmedAt: receipt?.status === 1 ? new Date() : undefined,
-          errorMessage: receipt?.status === 1 ? null : 'Transaction reverted',
+          confirmedAt: confirmed ? new Date() : undefined,
+          errorMessage: confirmed ? null : 'Transaction reverted',
         },
       });
     } catch (error) {
@@ -154,17 +165,15 @@ export class BlockchainService {
     });
   }
 
-  private mapRewardTypeToContract(type: string) {
-    const map: Record<string, string> = {
-      PARTICIPATION: 'ParticipationReward',
-      WIN: 'WinReward',
-      DRAW: 'DrawReward',
-      LOSE: 'LoseReward',
-      PERFORMANCE: 'PerformanceReward',
-      STREAK: 'StreakBonus',
-      SEASON: 'SeasonReward',
-    };
-
-    return map[type] ?? type;
+  private async syncRewardLedgerTxHash(battleId: string, txHash: string) {
+    await this.prisma.rewardLedger.updateMany({
+      where: {
+        battleId,
+        onChainTxHash: null,
+      },
+      data: {
+        onChainTxHash: txHash,
+      },
+    });
   }
 }

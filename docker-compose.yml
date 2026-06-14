@@ -1,50 +1,10 @@
 services:
-  battle-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: brainbattle-battle-api
-    restart: unless-stopped
-    ports:
-      - "3001:3001"
-    env_file:
-      - .env.docker
-    volumes:
-      - .:/app
-      - /app/node_modules
-    depends_on:
-      battle-db:
-        condition: service_healthy
-      battle-redis:
-        condition: service_healthy
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    command: npm run start:dev
-
-  battle-db:
-    image: postgres:16-alpine
-    container_name: brainbattle-battle-db
-    restart: unless-stopped
-    ports:
-      - "5433:5432"
-    environment:
-      POSTGRES_USER: brainbattle
-      POSTGRES_PASSWORD: brainbattle
-      POSTGRES_DB: brainbattle_battle
-    volumes:
-      - battle_postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U brainbattle -d brainbattle_battle"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   battle-redis:
     image: redis:7-alpine
     container_name: brainbattle-battle-redis
     restart: unless-stopped
     ports:
-      - "6380:6379"
+      - "6379:6379"
     command: redis-server --appendonly yes
     volumes:
       - battle_redis_data:/data
@@ -55,5 +15,4 @@ services:
       retries: 10
 
 volumes:
-  battle_postgres_data:
   battle_redis_data:

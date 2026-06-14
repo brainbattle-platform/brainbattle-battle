@@ -31,6 +31,18 @@ import {
 export class BattleController {
   constructor(private readonly battleService: BattleService) { }
 
+
+
+  @Get('me/active')
+  @ApiOperation({
+    summary: 'Get current player active battle',
+    description:
+      'Returns CREATED/RUNNING battle for current player if there is one. Used by mobile to resume real gameplay state.',
+  })
+  getMyActiveBattle(@CurrentUser() user: AuthUser) {
+    return this.battleService.getMyActiveBattle(user.id);
+  }
+
   @Get('me/history')
   @ApiOperation({ summary: 'Get current player battle history' })
   getMyHistory(
@@ -131,6 +143,20 @@ export class BattleController {
     @Param('battleId') battleId: string,
   ) {
     return this.battleService.getPublicQuestions(user.id, battleId);
+  }
+
+  @Get(':battleId/current-question')
+  @ApiOperation({
+    summary: 'Get current active question for current player',
+    description:
+      'Server-authoritative question endpoint. Returns one active question with server timer.',
+  })
+  @ApiParam({ name: 'battleId' })
+  getCurrentQuestion(
+    @CurrentUser() user: AuthUser,
+    @Param('battleId') battleId: string,
+  ) {
+    return this.battleService.getCurrentQuestion(user.id, battleId);
   }
 
   @Post(':battleId/answers')

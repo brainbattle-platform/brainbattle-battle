@@ -13,7 +13,7 @@ import type { AuthUser } from '../auth/auth.types';
 import { env } from '../common/env';
 import { BattleEventsService } from './battle-events.service';
 import { BattleService } from './battle.service';
-import { StartBattleFromRoomDto } from './dto';
+import { StartBattleFromRoomDto, SubmitAnswerDto } from './dto';
 
 type JoinBattleSocketDto = {
   battleId: string;
@@ -21,6 +21,10 @@ type JoinBattleSocketDto = {
 
 type StartBattleRoomSocketDto = StartBattleFromRoomDto & {
   roomId: string;
+};
+
+type SubmitAnswerSocketDto = SubmitAnswerDto & {
+  battleId: string;
 };
 
 @WebSocketGateway({
@@ -57,11 +61,59 @@ export class BattleGateway implements OnGatewayInit {
     await client.join(this.events.userChannel(user.id));
     await client.join(this.events.battleChannel(dto.battleId));
 
-    const battle = await this.battleService.getBattle(dto.battleId);
+    const snapshot = await this.battleService.getBattleRuntimeSnapshot(
+      user.id,
+      dto.battleId,
+    );
 
-    client.emit('battle.state', battle);
+    client.emit('battle.state', snapshot.battle);
 
-    return battle;
+    if (snapshot.currentQuestion) {
+      client.emit('battle.question', snapshot.currentQuestion);
+    }
+
+    client.emit('battle.reconnected', snapshot);
+
+    return snapshot;
+  }
+
+  @UseGuards(AuthGuard)
+  @SubscribeMessage('battle.currentQuestion')
+  async getCurrentQuestion(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() dto: JoinBattleSocketDto,
+  ) {
+    const user = client.data.user as AuthUser;
+
+    await client.join(this.events.userChannel(user.id));
+    await client.join(this.events.battleChannel(dto.battleId));
+
+    const currentQuestion = await this.battleService.getCurrentQuestion(
+      user.id,
+      dto.battleId,
+    );
+
+    client.emit('battle.question', currentQuestion);
+
+    return currentQuestion;
+  }
+
+  @UseGuards(AuthGuard)
+  @SubscribeMessage('battle.answer.submit')
+  async submitAnswer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() dto: SubmitAnswerSocketDto,
+  ) {
+    const user = client.data.user as AuthUser;
+
+    await client.join(this.events.userChannel(user.id));
+    await client.join(this.events.battleChannel(dto.battleId));
+
+    return this.battleService.submitAnswer(user.id, dto.battleId, {
+      questionSnapshotId: dto.questionSnapshotId,
+      selectedOptionKey: dto.selectedOptionKey,
+      textAnswer: dto.textAnswer,
+    });
   }
 
   @UseGuards(AuthGuard)
